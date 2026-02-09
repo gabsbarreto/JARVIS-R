@@ -577,10 +577,12 @@ rate <- c(0.001)
 TIMES <- 1
 
 results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
-saveRDS(results, 'resultsphil5.rds')
+
+dir.create('results', showWarnings = F, recursive = T)
+saveRDS(results, 'results/resultsanticoag2.rds')
 
 ## summarise#####
-results <- read_rds('resultsphil5.rds')
+results <- read_rds('results/resultsanticoag2.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
   filter(FTscreening == "Include" & newpred < thresh) %>%
@@ -655,7 +657,7 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
   scale_x_continuous(expand=c(0, 0)) +
   theme_classic() 
 
-ggsave('Philippa5.png', width = 6, height = 3, dpi = 300)
+#ggsave('Philippa5.png', width = 6, height = 3, dpi = 300)
 
 summary(sumtextPICOS$aucpr)
 ## Histograms ####
@@ -669,7 +671,7 @@ ggplot(data = subset(results,new == 1 | new ==10 | new == 19 ), aes(x = (Include
   theme_classic() +
   theme(legend.position = "top") + scale_x_continuous(limits = c(0,1))
 
-ggsave('anticoag2 distrib.png', width = 10, height = 3.3, dpi = 300)
+#ggsave('anticoag2 distrib.png', width = 10, height = 3.3, dpi = 300)
 
 ggplot(data = subset(results,new <=20 & new >10  ), aes(x = (newpred))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +

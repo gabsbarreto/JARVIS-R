@@ -574,7 +574,9 @@ rate <- c(0.001)
 TIMES <- 1
 
 results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
-saveRDS(results, 'resultsphil3.rds')
+
+dir.create('results', showWarnings = F, recursive = T)
+saveRDS(results, 'results/resultsSedatbehav.rds')
 ## summarise#####
 results <- read_rds('resultsphil3.rds')
 
@@ -652,7 +654,7 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
   geom_vline(xintercept = 10.452962, linetype = 3, colour = 'gray20')+
   theme_classic() 
 
-ggsave('Philippa3.png', width = 6, height = 3, dpi = 300)
+#ggsave('Philippa3.png', width = 6, height = 3, dpi = 300)
 summary(sumtextPICOS$aucpr)
 
 ## Histograms ####
@@ -666,5 +668,5 @@ ggplot(data = subset(results,new == 1 | new ==2 | new == 3 ), aes(x = (Include))
   theme_classic() +
   theme(legend.position = "top") + scale_x_continuous(limits = c(0,1))
 
-ggsave('PO-behaviour distrib.png', width = 10, height = 3.3, dpi = 300)
+#ggsave('PO-behaviour distrib.png', width = 10, height = 3.3, dpi = 300)
 
