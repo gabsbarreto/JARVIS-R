@@ -9,7 +9,6 @@ library(dplyr)
 library(ggpubr)
 library(PRROC)
 
-
 run_each5_with_repeats_parallel <- function(df, n, epochs, hiddenunis, activ,  stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,  repeats, n_workers) {
   
   # remove contents of the h2o server if one is open already
@@ -155,8 +154,6 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
   }
   return(results)
 }
-
-
 
 # ROC-PR FUNCTION####
 calc_aucpr <- function(df_iter) {
