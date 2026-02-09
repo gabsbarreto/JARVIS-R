@@ -226,12 +226,9 @@ dfPICOSfinal <- dfwithPICOS %>%
   mutate(abstractfull = ifelse( rowSums(select(.,contains('sumabst')))>2,1,0)) %>%
   mutate(sumall = rowSums(select(.,starts_with('sum'))))
 
-
-
 dfexclude <- dfPICOSfinal%>%
-  rename(RELEVANCE = finaldecision) 
-
-### PREPARE DATA AND RECIPE#####
+  rename(RELEVANCE = finaldecision)
+## PREPARE DATA AND RECIPE#####
 dftoken <- dfexclude %>%
   select(key, title, authors, abstract, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn,  RELEVANCE, starts_with('sum')) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>% # Remove hyphens
@@ -252,7 +249,6 @@ dftoken <- dfexclude %>%
                              review == 'Yes' ~ 0 ))%>%
   mutate(keys1 = ifelse(sumall >=3,1,0),
          score1 = ifelse(totalscore>=3,1,0)) 
-  
 
 tokenization_recipe <- recipe(outcome ~ key + abstract + authors +  P +  I+ C+ O + S + abstractsub +  totalscore , data = dftoken) %>%
   update_role(key, new_role = "id") %>% #Mark 'key' as an ID
@@ -276,28 +272,20 @@ tokenization_recipe <- recipe(outcome ~ key + abstract + authors +  P +  I+ C+ O
   step_mutate(across(where(is.numeric), ~ (. - mean(.)) )) %>%
   step_dummy( all_of(c('P', 'I', 'C','O','S')), one_hot = T)
 
-
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
-
 
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = outcome, y = ..density..))
 
 saveRDS(baked_df, 'BASB final.rds')
-
 ##START FROM HERE WITH THE BAKED READY####
 baked_df <- read_rds('BASB final.rds') %>%
   mutate(weightsc = ifelse(outcome == "Include", 40,1))
 
-
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = outcome, y = ..density..))
-
-
-
-
-##### new function 5 each time #####
+##new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
   localH2O = h2o.init(ip="localhost", port = 54321, 
@@ -566,10 +554,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   
   return(bind_rows(results))
 }
-
-
-
-
 ##run it here#####
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
@@ -584,8 +568,7 @@ TIMES <- 1
 
 results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
 saveRDS(results, 'resultsBASB.rds')
-
-###summarise#####
+##summarise#####
 results <- read_rds('resultsBASB.rds')
 
 EXCINC <- results %>% 
@@ -619,7 +602,6 @@ calculations <- sumtextPICOS %>%
   mutate(f1 = 2 * ( (precision * recall) / (precision + recall)  ))
 View(calculations)
 
-
 sum3 <- sumtextPICOS %>%
   group_by(configs) %>%
   summarise_at(vars(new, inc.incorrect, exc.incorrect), funs(max(.), min(.)) )%>%
@@ -635,7 +617,6 @@ sum3 <- sumtextPICOS %>%
                                           'l2', 'rate'))
 View(sum3)
 
-
 ggplot(data = sumtextPICOS, aes(x = new, y = inc.incorrect)) +
   geom_line(colour = 'blue') +
   geom_line(colour = 'red', aes(y = exc.incorrect)) +
@@ -648,9 +629,7 @@ ggplot(data = sumtextPICOS, aes(x = new, y = inc.incorrect)) +
   scale_y_continuous(limits = c(0,max(sumtextPICOS$inc.incorrect)),name = 'Blue = Included Incorrectly', sec.axis = sec_axis(~. , name = "Red = Excluded Incorrectly")) +
   labs(x = 'Rounds') +
   theme_classic()
-
-
-## Histograms ####
+##Histograms ####
 
 ggplot(data = subset(results, new < 11 ), aes(x = (newpred))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
