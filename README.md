@@ -1,18 +1,19 @@
 # JARVIS-R
 
-H2O-based simulation workflows for **abstract screening in systematic reviews**.
+JARVIS-R is a machine-learning decision support workflow for **title/abstract screening in systematic reviews**.
 
-This repository contains R scripts that:
-- clean and tokenize title/abstract text,
-- build prediction features (including PICOS-derived variables),
-- train H2O models,
-- evaluate screening performance (e.g., recall, specificity, AUC-PR),
-- save intermediate baked datasets and final results (`.rds`).
+Its goal is to reduce manual screening workload while maintaining high sensitivity for relevant studies. In this repository, JARVIS:
+- converts review metadata and abstract text into model-ready features (including PICOS-derived signals),
+- trains and tests H2O models across parameter settings,
+- estimates screening trade-offs (for example recall, specificity, and AUC-PR),
+- outputs ranked/thresholded predictions so reviewers can prioritize likely includes and safely exclude low-priority records faster.
+
 
 ## Repository structure
 
 - `scripts/`: main modeling pipelines (one script per review/topic).
 - `data/`: input `.rds` files used by scripts.
+- `baked/`: intermediate processed datasets created by most scripts.
 - `requirements.R`: installs/loads packages needed by scripts.
 - project root: output files (`results*.rds`, plots, some `*final.rds`).
 
@@ -32,7 +33,7 @@ source("requirements.R")
 list.files("data")
 ```
 
-4. Run a script from repo root. Example:
+4. Run one screening workflow script from repo root. Example:
 
 ```r
 source("scripts/Sedat behaviour children h2o.R")
@@ -47,6 +48,57 @@ Rscript "scripts/Sedat behaviour children h2o.R"
 5. Review outputs:
 - final model results are saved as `results*.rds` in project root,
 - most scripts also save baked datasets in `baked/`.
+- plots are produced in-session to visualize trade-offs.
+
+## Intended use
+
+JARVIS is intended as a **screening prioritization tool**, not a replacement for reviewer judgment.
+
+- Use model outputs to rank studies and choose practical read thresholds.
+- Prioritize settings that maintain high recall for likely includes.
+- Keep a human-in-the-loop process for final include/exclude decisions, especially near model thresholds.
+
+## Methods overview
+
+The scripts follow a common modeling pattern:
+
+1. Data preparation
+- Load topic-specific `.rds` data.
+- Clean text fields (normalize case, punctuation, numbers, and encoding artifacts).
+- Parse PICOS-style fields and derive numeric features (for example `Pn`, `In`, `Cn`, `On`, `Sn`, `totalscore`).
+
+2. Feature engineering (recipes)
+- Tokenize abstract text.
+- Remove stopwords.
+- Build n-grams (up to 3-grams).
+- Compute TF-IDF features.
+- Reduce dimensionality with PCA on TF-IDF space (retain ~90% variance).
+- One-hot encode structured categorical variables (P/I/C/O/S/review).
+
+3. Model training (H2O deep learning)
+- Train Bernoulli classification models (`Include` vs `Exclude`) with weighted classes.
+- Use cross-validation folds and average predictions from CV models.
+- Sweep hyperparameters across epochs, architecture, activation, regularization, learning rate, stopping tolerance, and mini-batch size.
+
+4. Iterative screening simulation
+- Start from a small mixed sample of likely includes/excludes.
+- Retrain and rescore unscreened records in rounds.
+- Use probability thresholds to simulate what would be read next vs excluded.
+- Track workload and error trade-offs over rounds.
+
+5. Evaluation
+- Main metrics include recall, specificity, percentage read (`percread`), and AUC-PR.
+- Additional summaries quantify potentially missed full-text includes (`foundft`) under each operating point.
+
+## How to interpret outputs
+
+- `results*.rds`: run-level outputs with predictions and metrics across configurations.
+- `recall`: sensitivity to included studies (higher is safer for screening).
+- `specificity`: ability to exclude irrelevant studies.
+- `percread`: percentage of records still needing manual review.
+- `aucpr`: ranking quality for imbalanced include/exclude classes.
+
+In practice, choose operating points that preserve recall while reducing `percread`.
 
 ## Script inputs and outputs
 
@@ -81,13 +133,15 @@ Rscript "scripts/Sedat behaviour children h2o.R"
 ## Notes
 
 - H2O requires Java; if `h2o.init()` fails, verify Java is installed and on `PATH`.
+- H2O in these scripts is configured for local execution (`localhost:54321`) with multi-threading.
 - Scripts can take substantial time depending on hyperparameter loops and available cores.
 - Some plotting and dplyr warnings are expected (deprecated syntax in older code paths).
+- Results can vary by dataset/topic; validate performance per review before operational use.
 
-## Suggestions for what else to add
+## Recommended next additions
 
-1. Reproducibility section: R version, OS tested, and fixed random seeds used.
-2. Runtime expectations: approximate duration per script and recommended CPU/RAM.
+1. Reproducibility details: R version, OS tested, and fixed random seeds used.
+2. Runtime benchmarks: approximate duration per script and suggested CPU/RAM.
 3. Data dictionary: definitions of key columns (`FTscreening`, `P/I/C/O/S`, `totalscore`, etc.).
-4. Results interpretation guide: what each metric means for screening decisions.
-5. Changelog: track script updates and major modeling changes over time.
+4. Validation policy: minimum acceptable recall/safety threshold before deployment.
+5. Changelog: tracking script updates and major modeling changes over time.
