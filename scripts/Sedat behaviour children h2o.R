@@ -278,10 +278,11 @@ baked_df <- bake(prepped_recipe, new_data = NULL)
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = FTscreening, y = ..density..))
 
-saveRDS(baked_df, 'Philippa 3 final.rds')
+dir.create('baked', showWarnings = F, recursive = T)
+saveRDS(baked_df, 'baked/Sedatbehav final.rds')
 
 ##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('Philippa 3 final.rds') %>%
+baked_df <- read_rds('baked/Sedatbehav final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
 ggplot(baked_df, aes( x = totalscore*5)) + 
