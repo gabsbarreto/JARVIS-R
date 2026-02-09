@@ -1,4 +1,4 @@
-### libraries ####
+## libraries ####
 library(tidyverse)
 library(recipes)
 library(textrecipes)
@@ -174,11 +174,12 @@ calc_aucpr <- function(df_iter) {
   
   return(pr$auc.integral)
 }
-##separate and clean DEEPSEEK #####
-dfPICOSfinal <- read_rds('dfgpt.anticoag2.complete.rds') %>%
-  filter(!is.na(GPT_Response)) %>%
-  mutate(GPT_Response =  str_extract(GPT_Response, ".*\\]")  ) %>%
-  separate_wider_delim(cols = GPT_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S', 'DEC'), cols_remove = F) %>%
+
+## separate and clean DEEPSEEK #####
+dfPICOSfinal <- read_rds('data/anticoag.completeDEEPSEEK.rds') %>%
+  filter(!is.na(DEEPSEEK_Response)) %>%
+  mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
+  separate_wider_delim(cols = DEEPSEEK_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S', 'DEC'), cols_remove = F) %>%
   mutate(review = chartr("[],012345 '","...........", review),
          review = chartr("- ","..", review),
          review = gsub('[.]','',review),
@@ -223,7 +224,7 @@ dfPICOSfinal <- read_rds('dfgpt.anticoag2.complete.rds') %>%
   mutate(decision = NA) %>%
   filter(!is.na(reviewn)) %>%
   mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
-  filter(FTscreening != 'Awaiting classification')
+  filter(FTscreening != 'Awaiting classification') 
 ## PREPARE DATA AND RECIPE#####
 dftoken <- dfPICOSfinal %>%
   select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
@@ -278,10 +279,12 @@ baked_df <- bake(prepped_recipe, new_data = NULL)
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = FTscreening, y = ..density..))
 
-saveRDS(baked_df, 'Philippa 5 final.rds')
+dir.create('baked', showWarnings = F, recursive = T)
 
-##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('Philippa 5 final.rds') %>%
+saveRDS(baked_df, 'baked/Philippa 2 final.rds')
+
+## START FROM HERE WITH THE BAKED READY####
+baked_df <- read_rds('baked/Philippa 2 final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
 ggplot(baked_df, aes( x = totalscore * 5)) + 
@@ -293,11 +296,11 @@ ggplot(baked_df, aes( x = totalscore * 5)) +
 baked_df %>% filter(screening == "Include") %>%
   nrow()
 
-## new function 5 each time #####
+##### new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
-  q = 0
+  
   localH2O = h2o.init(ip="localhost", port = 54321, 
-                      startH2O = TRUE, nthreads=10, max_mem_size = '16G')
+                      startH2O = TRUE, nthreads=8, max_mem_size = '16G')
   
   
   # Initialize variables for Stage 2
@@ -542,12 +545,9 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     
     
     if (min_rounds <= i && sum(preds$Include >= threshold, na.rm = T) <= max(30, nrow(df1) / 100)) {
-      q = q+1
       
-      if (q > 1) {
-        return(bind_rows(results))
-        break }
-      
+      return(bind_rows(results))
+      break 
     }
     
     gc()
@@ -563,7 +563,8 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   
   return(bind_rows(results))
 }
-##run it here#####
+
+## run it here#####
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
 activ <- c('Tanh')
@@ -571,19 +572,20 @@ stop_rounds <- c(3)
 stop_tol <- c(1e-5)
 rates_anneal <- c(1e-3)
 min_batch <- c(1)
-l2 <- c(0.0257)
+l2 <- c(0.02575)
 rate <- c(0.001)
 TIMES <- 1
 
 results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
-saveRDS(results, 'resultsphil5.rds')
+saveRDS(results, 'resultsphil2.rds')
 
-##summarise#####
-results <- read_rds('resultsphil5.rds')
+## summarise#####
+results <- read_rds('resultsphil2.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
   filter(FTscreening == "Include" & newpred < thresh) %>%
   select(-starts_with(c('P_','I_', 'C_', 'O_', 'S_', 'KPC', 'review_')))
+
 sumtextPICOS <- results %>%
   mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
   mutate(inc.correct = ifelse(FTscreening == "Include" & newclass == "Include",1,0)  ) %>%
@@ -648,27 +650,29 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
   #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
   scale_y_continuous(limits = c(0,100),name = 'Performance value') +
   labs(x = '% of studies read', colour = "Metric") +
-  geom_vline(xintercept = 23.553719, linetype = 2, colour = 'orange')+
-  geom_vline(xintercept = 23.553719, linetype = 3, colour = 'gray20')+
   scale_color_manual(labels = c("% of includes identified", "Iteration Recall", "Joint Recall"  ,"Specificity"), values= c('red', 'blue', 'green', 'purple'))+
   scale_x_continuous(expand=c(0, 0)) +
+  geom_vline(xintercept = 23.897059, linetype = 2, colour = 'orange')+
+  geom_vline(xintercept = 23.897059, linetype = 3, colour = 'gray20')+
   theme_classic() 
 
-ggsave('Philippa5.png', width = 6, height = 3, dpi = 300)
+ggsave('Philippa2.png', width = 6, height = 3, dpi = 300)
 
 summary(sumtextPICOS$aucpr)
+
 ## Histograms ####
-ggplot(data = subset(results,new == 1 | new ==10 | new == 19 ), aes(x = (Include))) + 
+
+ggplot(data = subset(results,new == 1 | new ==6 | new == 13 ), aes(x = (Include))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~ new , ncol = 3, scale = 'free')+
+ facet_wrap(~ new , ncol = 3, scale = 'free')+
   labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
   theme_classic() +
   theme(legend.position = "top") + scale_x_continuous(limits = c(0,1))
 
-ggsave('anticoag2 distrib.png', width = 10, height = 3.3, dpi = 300)
+ggsave('anticoag1 distrib.png', width = 10, height = 3.3, dpi = 300)
 
 ggplot(data = subset(results,new <=20 & new >10  ), aes(x = (newpred))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
@@ -689,4 +693,3 @@ ggplot(data = subset(results,new <=30 & new >20  ), aes(x = (newpred))) +
   labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
   theme_classic() +
   theme(legend.position = "top") 
-

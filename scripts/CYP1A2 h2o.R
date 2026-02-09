@@ -1,4 +1,4 @@
-### libraries ####
+## libraries ####
 library(tidyverse)
 library(recipes)
 library(textrecipes)
@@ -155,7 +155,7 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
   return(results)
 }
 
-# ROC-PR FUNCTION####
+## ROC-PR FUNCTION####
 calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
@@ -174,13 +174,9 @@ calc_aucpr <- function(df_iter) {
   
   return(pr$auc.integral)
 }
-
-
-
 ##CYP1A2 data clean #####
-searcht <- '(CYP1A2 OR genotype OR genetics OR polymorphism) AND (caffeine) AND (exercise OR sports OR strength OR endurance OR power OR physical)'
 
-dfwithPICOS <- read_rds('CYP1A2O-newpipe.rds')
+dfwithPICOS <- read_rds('data/CYP1A2O-newpipe.rds')
 dfPICOSfinal <- dfwithPICOS %>%
   separate_wider_delim(cols = GPT_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S'), cols_remove = F) %>%
   mutate(review = chartr("[],012345 '","...........", review),
@@ -227,51 +223,7 @@ dfPICOSfinal <- dfwithPICOS %>%
   mutate(abstractsub = gsub(pattern = '[0-9]+', replacement = " ", abstractsub)) %>%
   mutate(abstractsub = gsub("\\s+", " " ,abstractsub)) %>%
   mutate(decision = NA) %>%
-  mutate(totalscore = rowSums(.[c('Pn','In','Cn','On','Sn')])) %>%
-  select(-search1, -search2, -search3) %>% 
-  mutate(words = searcht) %>%
-  mutate(across(
-    words,
-    ~ . %>% str_remove_all("\\[|\\]|\\(|\\)|\\s{2,}") %>% str_trim() %>% str_remove("\\.$")
-  )) %>% 
-  mutate(across(
-    keywords,
-    ~ . %>% str_replace_all("\\p{P}", ' ') %>% str_trim()
-  )) %>% 
-  mutate(keywords = tolower(keywords)) %>%
-  separate_wider_delim(words, delim = " AND ", names_sep = '_') %>%
-  separate_wider_delim(starts_with('words'),delim = " OR ", names_sep = '_' ) %>%
-  mutate(across(
-    starts_with('words') & !ends_with('match'),
-    ~ grepl(., keywords, ignore.case = T),
-    .names = "{.col}_key_match"
-  ))  %>% 
-  mutate(across(
-    starts_with('words') & !ends_with('match'),
-    ~ grepl(., abstract, ignore.case = T),
-    .names = "{.col}_abstract_match"
-  ))  %>% 
-  mutate(across(
-    starts_with('words') & !ends_with('match'),
-    ~ grepl(., title, ignore.case = T),
-    .names = "{.col}_title_match"
-  ))  %>% 
-  mutate_at(vars(ends_with('match')), funs(ifelse(. == T, 1,0)) ) %>%
-  mutate(sumkeys1 = ifelse(rowSums(select(.,starts_with('words_1') & contains('key'))) > 0, 1,0 )  ) %>%
-  mutate(sumkeys2 = ifelse(rowSums(select(.,starts_with('words_2') & contains('key'))) > 0, 1,0 )  ) %>%
-  mutate(sumkeys3 = ifelse(rowSums(select(.,starts_with('words_3') & contains('key'))) > 0, 1,0 )  ) %>%
-  mutate(sumtitle1 = ifelse(rowSums(select(.,starts_with('words_1') & contains('title'))) > 0, 1,0 )  ) %>%
-  mutate(sumtitle2 = ifelse(rowSums(select(.,starts_with('words_2') & contains('title'))) > 0, 1,0 )  ) %>%
-  mutate(sumtitle3 = ifelse(rowSums(select(.,starts_with('words_3') & contains('title'))) > 0, 1,0 )  ) %>%
-  mutate(sumabstract1 = ifelse(rowSums(select(.,starts_with('words_1') & contains('abstract'))) > 0, 1,0 )  ) %>%
-  mutate(sumabstract2 = ifelse(rowSums(select(.,starts_with('words_2') & contains('abstract'))) > 0, 1,0 )  ) %>%
-  mutate(sumabstract3 = ifelse(rowSums(select(.,starts_with('words_3') & contains('abstract'))) > 0, 1,0 )  )  %>%
-  select(-starts_with('words')) %>%
-  mutate(sumallkeys = rowSums(select(.,contains('sumkey'))),
-         sumalltitle = rowSums(select(.,contains('sumtitle'))),
-         sumallabstract = rowSums(select(.,contains('sumabstract'))) ) %>%
-  mutate(sumall = rowSums(select(.,starts_with('sum'))))
-
+  mutate(totalscore = rowSums(.[c('Pn','In','Cn','On','Sn')])) 
 
 yes <- dfPICOSfinal %>%
   filter(key %in% c('rayyan-766614814',
@@ -299,11 +251,11 @@ yes <- dfPICOSfinal %>%
 dfPICOSfinal2 <- merge(dfPICOSfinal, yes,.by= 'key', all = T) %>%
   mutate(RELEVANCE = ifelse(is.na(RELEVANCE), "Exclude", RELEVANCE))
 
-
 dfexclude <- dfPICOSfinal2
-### PREPARE DATA AND RECIPE#####
+
+## PREPARE DATA AND RECIPE#####
 dftoken <- dfexclude %>%
-  select(key, title, authors, abstract, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn,  RELEVANCE, starts_with('sum')) %>%
+  select(key, title, authors, abstract, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn,  RELEVANCE) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>% # Remove hyphens
   mutate(abstractsub = gsub('[[:punct:]]', '', abstractsub)) %>% # Remove punctuation
   mutate(abstractsub = tolower(abstractsub)) %>%  # Convert to lowercase
@@ -319,9 +271,7 @@ dftoken <- dfexclude %>%
   mutate_at(vars(P, I, C, O, S), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
   mutate(outcome = factor(RELEVANCE)) %>%
   mutate(reviewn = case_when(review == 'No' ~ 1,
-                             review == 'Yes' ~ 0 ))%>%
-  mutate(keys1 = ifelse(sumall >=3,1,0),
-         score1 = ifelse(totalscore>=3,1,0)) 
+                             review == 'Yes' ~ 0 ))
 
 tokenization_recipe <- recipe(outcome ~ key + abstract + authors + title +  P +  I + C + O + S + review + 
                                 abstractsub +  totalscore , data = dftoken) %>%
@@ -348,17 +298,17 @@ tokenization_recipe <- recipe(outcome ~ key + abstract + authors + title +  P + 
   step_range(totalscore, min = 0, max = 1) %>%
   step_dummy( all_of(c('P', 'I', 'C','O','S', 'review')), one_hot = T) 
 
-
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
-
 
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = outcome, y = ..density..))
 
-saveRDS(baked_df, 'CYP1A2 final.rds')
+dir.create('baked', showWarnings = F, recursive = T)
+saveRDS(baked_df, 'baked/CYP1A2 final.rds')
+
 ##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('CYP1A2 final.rds') %>%
+baked_df <- read_rds('baked/CYP1A2 final.rds') %>%
   mutate(weightsc = ifelse(outcome == "Include", 40,1))
 
 ggplot(baked_df, aes( x = totalscore * 5 )) + 
@@ -366,10 +316,7 @@ ggplot(baked_df, aes( x = totalscore * 5 )) +
   theme_classic() +
   theme(legend.position = "top") +
   labs(x = 'PICOS score', fill = "FT decision")
-
-
-
-##### new function 5 each time #####
+## new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
   localH2O = h2o.init(ip="localhost", port = 54321, 
@@ -573,8 +520,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     my_keys <- h2o.ls()[,1]
     h2o.rm(my_keys[grepl(paste0("^", prefix), my_keys)], cascade = TRUE)
     
-   
-    
     exclude_keys <- preds %>%
       filter(Include < threshold) %>%
       select(key)
@@ -582,7 +527,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     # Add the "Exclude" count
     results[[i]] <- preds %>%
       select(-starts_with('KPC'), -starts_with('tfidf'), -starts_with(c('P_','I_', 'C_', 'O_', 'S_')))
-    
     
     sumtextPICOS <- (bind_rows(results)) %>%
       mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
@@ -595,8 +539,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
       merge(.,bind_rows(results) %>%  group_by(.,  new) %>% 
               summarise_at(vars(incpred, excpred), funs(max(.))), .by = c('configs', 'new')) %>%
       arrange(-desc(new))
-    
-    
+        
     print(ggarrange(nrow = 2,ncol = 1, ggplot(data = sumtextPICOS, aes(x = new, y = inc.incorrect)) +
                       geom_line(colour = 'blue') +
                       geom_line(colour = 'red', aes(y = exc.incorrect)) +
@@ -617,9 +560,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
                       labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known outcome') +
                       theme_classic() +
                       theme(legend.position = "top")))
-    
-    
-    
+
     
     if (min_rounds <= i && sum(preds$Include >= threshold, na.rm = T) <= max(30, nrow(df1) / 100)) {
       
@@ -641,9 +582,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   return(bind_rows(results))
 }
 
-
-
-
 ##run it here#####
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
@@ -659,7 +597,7 @@ TIMES <- 1
 results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
 saveRDS(results, 'resultsCYP.rds')
 
-###summarise#####
+##summarise#####
 results <- read_rds('resultsCYP.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
@@ -695,13 +633,11 @@ sumtextPICOS <- results %>%
     recall_cumm = (sum(baked_df$outcome == "Include") - exc.incorrect ) /    ((sum(baked_df$outcome == "Include") - exc.incorrect ) + exc.incorrect) * 100,
          specificity = exc.correct / (exc.correct + inc.incorrect) * 100) 
 
-
 calclong <- sumtextPICOS %>%
   mutate(aucpr = aucpr*100) %>%
   bind_rows(data.frame(new = 0, percread = 0, specificity = 0, foundft =0, recall=0, recall_cumm = 0)) %>%
   pivot_longer(cols =c( specificity,  foundft, recall, recall_cumm)) %>%
   mutate(name = factor(name))
-
 
 ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.incorrect + inc.correct ))) +
   geom_line(colour = 'blue') +
@@ -739,6 +675,7 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
 ggsave('CYP1A2.png', width = 6, height = 3, dpi = 300)
 
 summary(sumtextPICOS$aucpr)
+
 ## Histograms ####
 
 ggplot(data = subset(results,new == 1 | new == 2), aes(x = (Include))) + 
@@ -752,43 +689,3 @@ ggplot(data = subset(results,new == 1 | new == 2), aes(x = (Include))) +
   theme(legend.position = "top") + scale_x_continuous(limits= c(0,1))
 
 ggsave('CYP1A2 distrib.png', width = 6.6, height = 3.3, dpi = 300)
-
-
-# sort so low probs go left, high probs go right
-
-probs1 <- results%>%
-  filter(new == 1) %>%
-  arrange((newpred)) %>%
-  mutate(p = pmin(pmax(newpred, 1e-6), 1 - 1e-6)) %>%
-  mutate(x =  qlogis(p))
-
-
-ggplot(probs1, aes(x, p)) +
-  stat_function(fun = plogis, xlim = range(probs1$x), size = 0.5, color = "gray", linetype = 2) +
-  geom_point(pch = 21, alpha = 1, size = 1.5, aes(fill = outcome)) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(xintercept = qlogis(0.4), linetype = 2) +
-  coord_cartesian(ylim = c(0, 1)) +
-  theme_minimal(base_size = 14) +
-  labs(x = "logit(probability)", y = "Probability", fill = 'Known decisions') +
-  theme(legend.position = "top") 
-
-
-
-baked_df %>% 
-  mutate(scorecat = ifelse(totalscore*5 <3.5, 'low', 'high'))%>%
-  group_by(outcome) %>%
-  #filter(totalscore *5   >= 3.5) %>% 
-  summarise(min(totalscore * 5), max(totalscore*5), mean(totalscore*5)) 
-
-baked_df %>% 
-  mutate(scorecat = ifelse(totalscore*5 <3.5, 'low', 'high'))%>%
-  group_by( totalscore *5) %>%
-  filter(totalscore * 5   >= 4) %>% 
-  summarise(n()) 
-
-baked_df %>% 
-  mutate(scorecat = ifelse(totalscore*5 <3.5, 'low', 'high'))%>%
-  group_by( outcome) %>%
-  #filter(totalscore *5   >= 3.5) %>% 
-  summarise(mean(totalscore*5), min(totalscore * 5), max(totalscore*5)) 

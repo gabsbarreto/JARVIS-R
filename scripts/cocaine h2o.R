@@ -1,4 +1,4 @@
-### libraries ####
+## libraries ####
 library(tidyverse)
 library(recipes)
 library(textrecipes)
@@ -154,8 +154,7 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
   }
   return(results)
 }
-
-# ROC-PR FUNCTION####
+## ROC-PR FUNCTION####
 calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
@@ -175,12 +174,11 @@ calc_aucpr <- function(df_iter) {
   return(pr$auc.integral)
 }
 
-
-###separate and clean DEEPSEEK #####
-dfPICOSfinal <- read_rds('anticoag.completeDEEPSEEK.rds') %>%
-  filter(!is.na(DEEPSEEK_Response)) %>%
-  mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
-  separate_wider_delim(cols = DEEPSEEK_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S', 'DEC'), cols_remove = F) %>%
+##separate and clean GPT #####
+dfPICOSfinal <- read_rds('data/dfgpt.cocaine.complete.rds') %>%
+  filter(!is.na(GPT_Response)) %>%
+  mutate(GPT_Response =  str_extract(GPT_Response, ".*\\]")  ) %>%
+  separate_wider_delim(cols = GPT_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S'), cols_remove = F) %>%
   mutate(review = chartr("[],012345 '","...........", review),
          review = chartr("- ","..", review),
          review = gsub('[.]','',review),
@@ -198,10 +196,7 @@ dfPICOSfinal <- read_rds('anticoag.completeDEEPSEEK.rds') %>%
          O = gsub('[.]','',O),
          S = chartr("[],0123456 '","............", S),
          S = chartr("- ","..", S),
-         S = gsub('[.]','',S),
-         DEC = chartr("[],0123456 '","............", DEC),
-         DEC = chartr("- ","..", DEC),
-         DEC = gsub('[.]','',DEC)) %>%
+         S = gsub('[.]','',S)) %>%
   mutate(Pn = case_when(P =='Yes'~ 1,   ### create numerical variables with PICOS score 
                         P == 'No' ~ 0,
                         P == 'Uncertain' ~ 0.5),
@@ -218,20 +213,16 @@ dfPICOSfinal <- read_rds('anticoag.completeDEEPSEEK.rds') %>%
                         S == 'No' ~ 0,
                         S == 'Uncertain' ~ 0.5),
          reviewn = case_when(review == 'No' ~ 1,
-                             review == 'Yes' ~ 0 )) %>%
-  select(abID, title, abstract,  review, P, I, C, O, S,reviewn, Pn, In,Cn, On, Sn,  DEC, screening, FTscreening) %>%
+                             review == 'Yes' ~ 0, 
+                             review == 'Uncertain' ~ 0.5)) %>%
+  select(abID, title, abstract,  review, P, I, C, O, S,reviewn, Pn, In,Cn, On, Sn, screening, FTscreening) %>%
   mutate(totalscore = rowSums(.[c('Pn','In','Cn','On','Sn')])) %>%
-  mutate_at(vars(P, I, C, O, S, DEC), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
   mutate(decision = NA) %>%
-  filter(!is.na(reviewn)) %>%
-  mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
-  filter(FTscreening != 'Awaiting classification') 
+  filter(!is.na(reviewn)) 
 
-
-
-### PREPARE DATA AND RECIPE#####
+## PREPARE DATA AND RECIPE#####
 dftoken <- dfPICOSfinal %>%
-  select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
+  select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn,  screening, FTscreening ) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>%              # Remove hyphens
   mutate(abstractsub = iconv(abstractsub, from = "", to = "ASCII//TRANSLIT")) %>%  # Remove/convert weird chars
   mutate(abstractsub = gsub("â€“|â€”|â€|â€™|â€œ|â€˜|â€¢|âˆ’", " ", abstractsub)) %>% # Remove common mojibake
@@ -246,16 +237,12 @@ dftoken <- dfPICOSfinal %>%
   mutate(titlesub = tolower(titlesub)) %>%
   mutate(titlesub = gsub('[0-9]+', ' ', titlesub)) %>%
   mutate(titlesub = gsub("\\s+", " ", titlesub))  %>%        # Normalize whitespace
-  mutate_at(vars(review), funs(factor(., levels = c('Yes', 'No')))) %>%
-  mutate_at(vars(P, I, C, O, S), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
+  mutate_at(vars(P, I, C, O, S, review), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
   mutate(screening = factor(screening)) %>%
   mutate(FTscreening = factor(FTscreening)) %>%
-  mutate(reviewn = case_when(review == 'No' ~ 1,
-                             review == 'Yes' ~ 0 )) %>%
   mutate(abID = as.factor(abID)) %>%
   # filter(review == "No") %>%
   filter(!is.na(abstract))
-
 
 tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstractsub +  P +  I+ C+ O + S + review + totalscore , data = dftoken) %>%
   update_role(abID, new_role = "id") %>% #Mark 'key' as an ID
@@ -274,10 +261,9 @@ tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstra
   #step_tokenfilter(titlesub,  max_tokens = 3000) %>%
   #step_tfidf(titlesub) %>%
   step_pca(starts_with('tfidf'),threshold = .90, prefix = 'KPCa')  %>%
-  step_center(starts_with('KPC')) %>% 
+  step_center(starts_with('KPCa')) %>% 
   step_range(totalscore, min = 0, max = 1) %>%
   step_dummy( all_of(c('P', 'I', 'C','O','S', 'review')), one_hot = T) 
-
 
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
@@ -285,9 +271,12 @@ baked_df <- bake(prepped_recipe, new_data = NULL)
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = FTscreening, y = ..density..))
 
-saveRDS(baked_df, 'Philippa 2 final.rds')
+dir.create('baked', showWarnings = F, recursive = T)
+
+saveRDS(baked_df, 'baked/Cocaine final.rds')
+
 ##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('Philippa 2 final.rds') %>%
+baked_df <- read_rds('baked/Cocaine final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
 ggplot(baked_df, aes( x = totalscore * 5)) + 
@@ -296,14 +285,11 @@ ggplot(baked_df, aes( x = totalscore * 5)) +
   theme(legend.position = "top") +
   labs(x = 'PICOS score', fill = "FT decision")
 
-baked_df %>% filter(screening == "Include") %>%
-  nrow()
-
-##### new function 5 each time #####
+## new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
   localH2O = h2o.init(ip="localhost", port = 54321, 
-                      startH2O = TRUE, nthreads=8, max_mem_size = '16G')
+                      startH2O = TRUE, nthreads=8, max_mem_size = '8g')
   
   
   # Initialize variables for Stage 2
@@ -326,29 +312,29 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     if('predict' %in% colnames(preds)) {
       
       
-    #  inc_rate <- (include_count + exclude_count) / nrow(df1)
-    #  print(inc_rate)
-    #  
-    #  cap <- dplyr::case_when(
-    #    #inc_rate > 0.30 ~ 0.75,
-    #    #inc_rate > 0.25 ~ 0.70,
-    #    #inc_rate > 0.20 ~ 0.60,
-    #    #inc_rate > 0.15 ~ 0.55,
-    #    inc_rate > 0.10 ~ 0.5,
-    #    inc_rate > 0.05 ~ 0.45,
-    #    TRUE            ~ threshold
-    #  )
-    #  
-    #  
-    #  old <- threshold
-    #  
-    #  if (since_change >= min_hold && cap > threshold) {
-    #    threshold <- cap        # jump directly to the mapped cap
-    #    since_change <- 1       # or set to 1 if you prefer counting this iter as "held"
-    #  } else {
-    #    since_change <- since_change + 1
-    #  }
-    #  print(paste('threshold =', threshold))
+  #    inc_rate <- (include_count + exclude_count) / nrow(df1)
+  #    print(inc_rate)
+  #    
+  #    cap <- dplyr::case_when(
+  #      #inc_rate > 0.30 ~ 0.75,
+  #      #inc_rate > 0.25 ~ 0.70,
+  #      #inc_rate > 0.20 ~ 0.60,
+  #      #inc_rate > 0.15 ~ 0.55,
+  #      inc_rate > 0.10 ~ 0.5,
+  #      inc_rate > 0.05 ~ 0.45,
+  #      TRUE            ~ threshold
+  #    )
+  #    
+  #    
+  #    old <- threshold
+  #    
+  #    if (since_change >= min_hold && cap > threshold) {
+  #      threshold <- cap        # jump directly to the mapped cap
+  #      since_change <- 1       # or set to 1 if you prefer counting this iter as "held"
+  #    } else {
+  #      since_change <- since_change + 1
+  #    }
+  #    print(paste('threshold =', threshold))
       preds <- preds %>% 
         suppressMessages(left_join(.,df1))
       
@@ -365,15 +351,14 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
                     slice(.,1:7 )) %>%  
         select(-predict, -Include, -Exclude, -new, -incpred, -excpred, -newpred, - thresh) 
       
-      
     }else{
       
       sampled_df <- preds %>%  
         arrange(desc(totalscore)) %>%
-        slice(c((nrow(.)-4):nrow(.), 1:20)) %>%
+        slice(.,c((nrow(.)-4):nrow(.), 1:20)) %>%
         bind_rows(preds %>%  
                     arrange(desc(totalscore)) %>%
-                    filter(totalscore*5 <= 2.5) %>% slice(1:5))
+                    filter(.,totalscore*5 <= 2.5) %>% slice(1:5))
       
       
     }
@@ -390,7 +375,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     # 1) 3 repeats of each Include, labeled folds 1, 2, 3
     includes3 <- includes %>%
       mutate(.k = 1L) %>% 
-      left_join(data.frame(folds = 1:3, .k = 1L), by = ".k") %>%
+      left_join(data.frame(folds = 1:3, .k = 1L), by = ".k",relationship = "many-to-many") %>%
       select(-.k)
     
     # 2) Randomize all Excludes and partition into 3 (no overlap / no replacement)
@@ -459,23 +444,29 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     modelcv1 <- h2o.getModel(paste(i, epoc, as.character(activ), stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,'cv_1',sep = '_'))
     predweird1 <- predict(modelcv1, newdata = h2otest ) 
     
-    predweird1.2 <- bind_cols(test, as.data.frame(predweird1)) %>%
+    predweird1_df <- as.data.frame(h2o.cbind(h2otest, predweird1))
+    
+    predweird1.2 <- predweird1_df %>%
       mutate(pp = 1) %>%
-      select(-starts_with('KPC'), -contains('_'))
+      select(-starts_with("KPC"), -contains("_"))
     
     modelcv2 <- h2o.getModel(paste(i, epoc, as.character(activ), stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,'cv_2',sep = '_'))
     predweird2 <- predict(modelcv2, newdata = h2otest ) 
     
-    predweird2.2 <- bind_cols(test, as.data.frame(predweird2)) %>%
-      mutate(pp = 2) %>%
-      select(-starts_with('KPC'), -contains('_'))
+    predweird2_df <- as.data.frame(h2o.cbind(h2otest, predweird2))
+    
+    predweird2.2 <- predweird2_df %>%
+      mutate(pp = 1) %>%
+      select(-starts_with("KPC"), -contains("_"))
     
     modelcv3 <- h2o.getModel(paste(i, epoc, as.character(activ), stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,'cv_3',sep = '_'))
     predweird3 <- predict(modelcv3, newdata = h2otest ) 
     
-    predweird3.2 <- bind_cols(test, as.data.frame(predweird3)) %>%
-      mutate(pp = 3) %>%
-      select(-starts_with('KPC'), -contains('_'))
+    predweird3_df <- as.data.frame(h2o.cbind(h2otest, predweird3))
+    
+    predweird3.2 <- predweird3_df %>%
+      mutate(pp = 1) %>%
+      select(-starts_with("KPC"), -contains("_"))
     
     
     all <- bind_rows(predweird1.2,
@@ -567,7 +558,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   return(bind_rows(results))
 }
 
-
 ##run it here#####
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
@@ -580,16 +570,16 @@ l2 <- c(0.02575)
 rate <- c(0.001)
 TIMES <- 1
 
-results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
-saveRDS(results, 'resultsphil2.rds')
+results <- run_each5_with_repeats(baked_df, 35,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
 
-###summarise#####
-results <- read_rds('resultsphil2.rds')
+saveRDS(results, 'resultscocaine.rds')
+
+##summarise#####
+results <- read_rds('resultscocaine.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
   filter(FTscreening == "Include" & newpred < thresh) %>%
   select(-starts_with(c('P_','I_', 'C_', 'O_', 'S_', 'KPC', 'review_')))
-
 
 sumtextPICOS <- results %>%
   mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
@@ -618,8 +608,7 @@ sumtextPICOS <- results %>%
           select(-FTscreening))%>%
   mutate(recall = inc.correct  /    (inc.correct   + exc.incorrect) * 100,
          recall_cumm = (sum(baked_df$FTscreening == "Include") - exc.incorrect ) /    ((sum(baked_df$FTscreening == "Include") - exc.incorrect ) + exc.incorrect) * 100,
-         specificity = (exc.correct / (exc.correct + inc.incorrect)) * 100,
-         wss95 = ((exc.correct + exc.incorrect)/ (exc.correct+ exc.incorrect+ inc.incorrect + inc.correct)) - 0.05 ) %>%
+         specificity = (exc.correct / (exc.correct + inc.incorrect)) * 100) %>%
   arrange(-desc(new)) ;View(sumtextPICOS) 
 
 calclong <- sumtextPICOS %>%
@@ -627,7 +616,6 @@ calclong <- sumtextPICOS %>%
   bind_rows(data.frame(new = 0, percread = 0, specificity = 0, foundft =0, recall=0, recall_cumm = 0)) %>%
   pivot_longer(cols =c( specificity,  foundft, recall, recall_cumm)) %>%
   mutate(name = factor(name))
-
 
 ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.incorrect + inc.correct ))) +
   geom_line(colour = 'blue') +
@@ -642,7 +630,6 @@ ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.inc
   labs(x = '% of studies read') +
   theme_classic()
 
-
 ggplot(data = calclong, aes(x = percread, y = value)) +
   geom_line(aes(colour = name), size = 1, alpha= 0.5) +
   #geom_line(colour = 'red', aes(y = round(specificity,1)), size = 1) +
@@ -656,48 +643,34 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
   #geom_text(vjust = -0.5, size = 3 ,aes(y = round(aucpr*100,1), label = round(aucpr*100,1)))+ 
   #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
   scale_y_continuous(limits = c(0,100),name = 'Performance value') +
+  scale_x_continuous(limits = c(0,55)) + 
   labs(x = '% of studies read', colour = "Metric") +
   scale_color_manual(labels = c("% of includes identified", "Iteration Recall", "Joint Recall"  ,"Specificity"), values= c('red', 'blue', 'green', 'purple'))+
   scale_x_continuous(expand=c(0, 0)) +
-  geom_vline(xintercept = 23.897059, linetype = 2, colour = 'orange')+
-  geom_vline(xintercept = 23.897059, linetype = 3, colour = 'gray20')+
+  geom_vline(xintercept = 50.499737, linetype = 2, colour = 'orange')+
+  geom_vline(xintercept = 48.921620, linetype = 3, colour = 'gray20')+
   theme_classic() 
 
-ggsave('Philippa2.png', width = 6, height = 3, dpi = 300)
+ggsave('cocaine.png', width = 6, height = 3, dpi = 300)
 
 summary(sumtextPICOS$aucpr)
 
 ## Histograms ####
 
-ggplot(data = subset(results,new == 1 | new ==6 | new == 13 ), aes(x = (Include))) + 
+ggplot(data = subset(results,new == 1 | new ==5 | new == 9 ), aes(x = (Include))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
- facet_wrap(~ new , ncol = 3, scale = 'free')+
+  facet_wrap(~ new , ncol = 3, scale = 'free')+
   labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
   theme_classic() +
   theme(legend.position = "top") + scale_x_continuous(limits = c(0,1))
 
-ggsave('anticoag1 distrib.png', width = 10, height = 3.3, dpi = 300)
+ggsave('PO-UR distrib.png', width = 10, height = 3.3, dpi = 300)
 
 
-ggplot(data = subset(results,new <=20 & new >10  ), aes(x = (newpred))) + 
-  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
-  geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(xintercept = 0.4, colour = 'blue', linetype = 2) +
-  facet_wrap(~ new * configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top") 
 
-ggplot(data = subset(results,new <=30 & new >20  ), aes(x = (newpred))) + 
-  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
-  geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(xintercept = 0.4, colour = 'blue', linetype = 2) +
-  facet_wrap(~ new * configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top") 
+
+
+

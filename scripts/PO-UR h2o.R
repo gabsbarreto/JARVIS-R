@@ -154,10 +154,7 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
   }
   return(results)
 }
-
-
-
-# ROC-PR FUNCTION####
+## ROC-PR FUNCTION####
 calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
@@ -177,9 +174,8 @@ calc_aucpr <- function(df_iter) {
   return(pr$auc.integral)
 }
 
-
-###separate and clean DEEPSEEK #####
-dfPICOSfinal <- read_rds('PO-URcompleteDEEPSEEK.rds') %>%
+##separate and clean DEEPSEEK #####
+dfPICOSfinal <- read_rds('data/PO-URcompleteDEEPSEEK.rds') %>%
   filter(!is.na(DEEPSEEK_Response)) %>%
   mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
   separate_wider_delim(cols = DEEPSEEK_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S', 'DEC'), cols_remove = F) %>%
@@ -228,10 +224,7 @@ dfPICOSfinal <- read_rds('PO-URcompleteDEEPSEEK.rds') %>%
   filter(!is.na(reviewn)) %>%
   mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
   filter(FTscreening != 'Awaiting assessment') 
-
-
-
-### PREPARE DATA AND RECIPE#####
+## PREPARE DATA AND RECIPE#####
 dftoken <- dfPICOSfinal %>%
   select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>%              # Remove hyphens
@@ -257,8 +250,6 @@ dftoken <- dfPICOSfinal %>%
   mutate(abID = as.factor(abID)) %>%
   # filter(review == "No") %>%
   filter(!is.na(abstract))
-
-
 tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstractsub +  P +  I+ C+ O + S + review + totalscore , data = dftoken) %>%
   update_role(abID, new_role = "id") %>% #Mark 'key' as an ID
   update_role(FTscreening, new_role = "id") %>% 
@@ -280,16 +271,17 @@ tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstra
   step_range(totalscore, min = 0, max = 1) %>%
   step_dummy( all_of(c('P', 'I', 'C','O','S', 'review')), one_hot = T) 
 
-
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
 
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = FTscreening, y = ..density..))
 
-saveRDS(baked_df, 'Philippa 1 final.rds')
+dir.create('baked', showWarnings = F, recursive = T)
+
+saveRDS(baked_df, 'baked/Philippa 1 final.rds')
 ##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('Philippa 1 final.rds') %>%
+baked_df <- read_rds('baked/Philippa 1 final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
 ggplot(baked_df, aes( x = totalscore * 5)) + 
@@ -300,9 +292,7 @@ ggplot(baked_df, aes( x = totalscore * 5)) +
 
 baked_df %>% filter(FTscreening == "Include") %>%
   nrow()
-
-
-##### new function 5 each time #####
+## new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
   localH2O = h2o.init(ip="localhost", port = 54321, 
@@ -568,8 +558,6 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   
   return(bind_rows(results))
 }
-
-
 ##run it here#####
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
@@ -585,14 +573,12 @@ TIMES <- 1
 results <- run_each5_with_repeats(baked_df, 13,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
 saveRDS(results, 'resultsphil1.rds')
 
-###summarise#####
+##summarise#####
 results <- read_rds('resultsphil1.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
   filter(FTscreening == "Include" & newpred < thresh) %>%
   select(-starts_with(c('P_','I_', 'C_', 'O_', 'S_', 'KPC', 'review_')))
-
-
 sumtextPICOS <- results %>%
   mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
   mutate(inc.correct = ifelse(FTscreening == "Include" & newclass == "Include",1,0)  ) %>%
@@ -629,7 +615,6 @@ calclong <- sumtextPICOS %>%
   pivot_longer(cols =c( specificity,  foundft, recall, recall_cumm)) %>%
   mutate(name = factor(name))
 
-
 ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.incorrect + inc.correct ))) +
   geom_line(colour = 'blue') +
   geom_line(colour = 'red', aes(y = exc.incorrect)) +
@@ -642,7 +627,6 @@ ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.inc
   scale_y_continuous(name = 'Blue = Suggested Includes', sec.axis = sec_axis(~. , name = "Red = Excluded Incorrectly")) +
   labs(x = '% of studies read') +
   theme_classic()
-
 
 ggplot(data = calclong, aes(x = percread, y = value)) +
   geom_line(aes(colour = name), size = 1, alpha= 0.5) +
@@ -669,7 +653,6 @@ ggsave('Philippa1.png', width = 6, height = 3, dpi = 300)
 summary(sumtextPICOS$aucpr)
 
 ## Histograms ####
-
 ggplot(data = subset(results,new == 1 | new ==5 | new == 9 ), aes(x = (Include))) + 
   #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +

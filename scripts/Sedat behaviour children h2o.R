@@ -7,8 +7,6 @@ library(future.apply)
 library(tibble)
 library(dplyr)
 library(ggpubr)
-library(PRROC)
-
 run_each5_with_repeats_parallel <- function(df, n, epochs, hiddenunis, activ,  stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,  repeats, n_workers) {
   
   # remove contents of the h2o server if one is open already
@@ -160,7 +158,7 @@ calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
   # True labels as 1/0
-  truth <- ifelse(df_iter$finaldecision == "Include", 1, 0)
+  truth <- ifelse(df_iter$FTscreening == "Include", 1, 0)
   
   # Predicted scores (probabilities)
   scores <- df_iter$newpred
@@ -175,28 +173,32 @@ calc_aucpr <- function(df_iter) {
   return(pr$auc.integral)
 }
 
-##hypertension data clean #####
-dfwithPICOS <- read_rds('dfgpt.stress.complete.rds')
-dfPICOSfinal <- dfwithPICOS %>%
-  separate_wider_delim(cols = GPT_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S'), cols_remove = F) %>%
+##separate and clean DEEPSEEK #####
+dfPICOSfinal <- read_rds('data/sedatbehav.completeDEEPSEEK.rds') %>%
+  filter(!is.na(DEEPSEEK_Response)) %>%
+  mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
+  separate_wider_delim(cols = DEEPSEEK_Response, delim = ',', names = c('review', 'P', 'I', 'C', 'O', 'S', 'DEC'), cols_remove = F) %>%
   mutate(review = chartr("[],012345 '","...........", review),
          review = chartr("- ","..", review),
          review = gsub('[.]','',review),
-         P = chartr("[],012345 '","...........", P),
+         P = chartr("[],0123456 '","............", P),
          P = chartr("- ","..", P),
          P = gsub('[.]','',P),
-         I = chartr("[],012345 '","...........", I),
+         I = chartr("[],0123456 '","............", I),
          I = chartr("- ","..", I),
          I = gsub('[.]','',I),
-         C = chartr("[],012345 '","...........", C),
+         C = chartr("[],0123456 '","............", C),
          C = chartr("- ","..", C),
          C = gsub('[.]','',C),
-         O = chartr("[],012345 '","...........", O),
+         O = chartr("[],0123456 '","............", O),
          O = chartr("- ","..", O),
          O = gsub('[.]','',O),
-         S = chartr("[],012345 '","...........", S),
+         S = chartr("[],0123456 '","............", S),
          S = chartr("- ","..", S),
-         S = gsub('[.]','',S)) %>%
+         S = gsub('[.]','',S),
+         DEC = chartr("[],0123456 '","............", DEC),
+         DEC = chartr("- ","..", DEC),
+         DEC = gsub('[.]','',DEC)) %>%
   mutate(Pn = case_when(P =='Yes'~ 1,   ### create numerical variables with PICOS score 
                         P == 'No' ~ 0,
                         P == 'Uncertain' ~ 0.5),
@@ -211,15 +213,20 @@ dfPICOSfinal <- dfwithPICOS %>%
                         O == 'Uncertain' ~ 0.5),
          Sn = case_when(S =='Yes'~ 1,
                         S == 'No' ~ 0,
-                        S == 'Uncertain' ~ 0.5)) %>%
-  dplyr::select(key, keywords, title, abstract, authors, year, review, P, I, C, O, S, Pn, In,Cn, On, Sn, decision, finaldecision) %>%
+                        S == 'Uncertain' ~ 0.5),
+         reviewn = case_when(review == 'No' ~ 1,
+                             review == 'Yes' ~ 0 )) %>%
+  select(abID, title, abstract,  review, P, I, C, O, S,reviewn, Pn, In,Cn, On, Sn,  DEC, screening, FTscreening) %>%
   mutate(totalscore = rowSums(.[c('Pn','In','Cn','On','Sn')])) %>%
-  filter(key != 'ardiologie et Pneumologie de Quebec' & key != 'iomedical Science') %>%
-  distinct(key, .keep_all = T)
+  mutate_at(vars(P, I, C, O, S, review), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
+  mutate(decision = NA) %>%
+  filter(!is.na(reviewn)) %>%
+  mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
+  filter(FTscreening != 'Awaiting assessment') 
 
-## PREPARE DATA #####
+## PREPARE DATA AND RECIPE#####
 dftoken <- dfPICOSfinal %>%
-  select(key, title, authors, abstract, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn,  decision, finaldecision) %>%
+  select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>%              # Remove hyphens
   mutate(abstractsub = iconv(abstractsub, from = "", to = "ASCII//TRANSLIT")) %>%  # Remove/convert weird chars
   mutate(abstractsub = gsub("â€“|â€”|â€|â€™|â€œ|â€˜|â€¢|âˆ’", " ", abstractsub)) %>% # Remove common mojibake
@@ -234,32 +241,32 @@ dftoken <- dfPICOSfinal %>%
   mutate(titlesub = tolower(titlesub)) %>%
   mutate(titlesub = gsub('[0-9]+', ' ', titlesub)) %>%
   mutate(titlesub = gsub("\\s+", " ", titlesub))  %>%        # Normalize whitespace
+  mutate_at(vars(review), funs(factor(., levels = c('Yes', 'No')))) %>%
   mutate_at(vars(P, I, C, O, S), funs(factor(., levels = c('Uncertain', 'Yes', 'No') ))) %>%
+  mutate(screening = factor(screening)) %>%
+  mutate(FTscreening = factor(FTscreening)) %>%
   mutate(reviewn = case_when(review == 'No' ~ 1,
-                             review == 'Yes' ~ 0 )) 
-
-rm(dfPICOSfinal)
-rm(dfwithPICOS)
-
-tokenization_recipe <- recipe(decision ~ key + abstract + authors  + abstractsub + P + I + C + O + S + totalscore + review + finaldecision, data = dftoken) %>%
-  update_role(key, new_role = "id") %>% #Mark 'key' as an ID
+                             review == 'Yes' ~ 0 )) %>%
+  mutate(abID = as.factor(abID)) %>%
+ # filter(review == "No") %>%
+  filter(!is.na(abstract))
+  
+tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstractsub + titlesub + P +  I+ C+ O + S  + review + totalscore , data = dftoken) %>%
+  update_role(abID, new_role = "id") %>% #Mark 'key' as an ID
+  update_role(FTscreening, new_role = "id") %>% 
   update_role(abstract, new_role = "id") %>% 
-  update_role(authors, new_role = "id") %>% 
-  update_role(finaldecision, new_role = "id") %>% 
   step_tokenize(abstractsub, token = "words") %>%
   step_stopwords(abstractsub, stopword_source = "smart") %>%
   #step_stem(abstractsub) %>%
   step_ngram(abstractsub, num_tokens = 3, min_num_tokens = 1) %>%
   step_tokenfilter(abstractsub,  max_tokens = 7000) %>%
   step_tfidf(abstractsub) %>%
-  #step_pca(starts_with('tfidf'),threshold = .80, prefix = 'KPCa')  %>%
   #step_tokenize(titlesub, token = "words") %>%
   #step_stopwords(titlesub, stopword_source = "smart") %>%
   #step_stem(titlesub) %>%
   #step_ngram(titlesub, num_tokens = 3, min_num_tokens = 1) %>%
-  #step_tokenfilter(titlesub,  max_tokens = 3000 ) %>%
+  #step_tokenfilter(titlesub,  max_tokens = 3000) %>%
   #step_tfidf(titlesub) %>%
-  #step_pca(c(reviewn, totalscore,keys1, score1), num_comp = 1, keep_original_cols = T) %>%
   step_pca(starts_with('tfidf'),threshold = .90, prefix = 'KPCa')  %>%
   step_center(starts_with('KPC')) %>% 
   step_range(totalscore, min = 0, max = 1) %>%
@@ -268,26 +275,29 @@ tokenization_recipe <- recipe(decision ~ key + abstract + authors  + abstractsub
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
 
-dir.create('baked', showWarnings = F, recursive = T)
+ggplot(baked_df, aes( x = totalscore)) + 
+  geom_histogram( aes(fill = FTscreening, y = ..density..))
 
-saveRDS(baked_df, 'baked/hypertension final.rds')
+saveRDS(baked_df, 'Philippa 3 final.rds')
 
 ##START FROM HERE WITH THE BAKED READY####
-baked_df <- read_rds('baked/hypertension final.rds') %>%
-  mutate(authors = ifelse(is.na(authors),'no author',authors )) %>%
-  mutate(finaldecision = as.factor(finaldecision)) %>%
-  mutate(weightsc = ifelse(decision == "Include", 40,1))
+baked_df <- read_rds('Philippa 3 final.rds') %>%
+  mutate(weightsc = ifelse(screening == "Include", 40,1))
 
-ggplot(baked_df, aes( x = totalscore * 5)) + 
-  geom_histogram( aes(fill = finaldecision, y = ..density..)) +
+ggplot(baked_df, aes( x = totalscore*5)) + 
+  geom_histogram( aes(fill = FTscreening, y = ..density..)) +
   theme_classic() +
   theme(legend.position = "top") +
   labs(x = 'PICOS score', fill = "FT decision")
+  
+baked_df %>% filter(FTscreening == "Include") %>%
+  nrow()
 
 ## new function 5 each time #####
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
-  
+  localH2O = h2o.init(ip="localhost", port = 54321, 
+                      startH2O = TRUE, nthreads=8, max_mem_size = '16G')
   
   
   # Initialize variables for Stage 2
@@ -295,7 +305,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   exclude_keys <- data.frame(NA)
   samplefull <- data.frame()
   preds <- df1 
-  min_rounds <- 71
+  min_rounds <- 1
   prefix <- paste0("worker", Sys.getpid(), "_", as.integer(Sys.time()), "_")
   threshold    <- 0.4
   min_hold     <- 1
@@ -305,78 +315,60 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   for (i in seq_len(max)) {
     time1 <- Sys.time()
     
-  
     
-    if(i > 1) {
+    
+    if('predict' %in% colnames(preds)) {
       
       
- #     inc_rate <- (include_count + exclude_count) / nrow(df1)
- #     print(inc_rate)
- #     
- #     cap <- dplyr::case_when(
- #       #inc_rate > 0.30 ~ 0.75,
- #       #inc_rate > 0.25 ~ 0.70,
- #       #inc_rate > 0.20 ~ 0.60,
- #       #inc_rate > 0.15 ~ 0.55,
- #       inc_rate > 0.10 ~ 0.5,
- #       inc_rate > 0.05 ~ 0.45,
- #       TRUE            ~ threshold
- #     )
- #   
- #   
- #    old <- threshold
- #    
- #    if (since_change >= min_hold && cap > threshold) {
- #      threshold <- cap        # jump directly to the mapped cap
- #      since_change <- 1       # or set to 1 if you prefer counting this iter as "held"
- #    } else {
- #      since_change <- since_change + 1
- #    }
- #    print(paste('threshold =', threshold))
+   #  inc_rate <- (include_count + exclude_count) / nrow(df1)
+   #  print(inc_rate)
+   #  
+   #  cap <- dplyr::case_when(
+   #    #inc_rate > 0.30 ~ 0.75,
+   #    #inc_rate > 0.25 ~ 0.70,
+   #    #inc_rate > 0.20 ~ 0.60,
+   #    #inc_rate > 0.15 ~ 0.55,
+   #    inc_rate > 0.10 ~ 0.5,
+   #    inc_rate > 0.05 ~ 0.45,
+   #    TRUE            ~ threshold
+   #  )
+   #  
+   #  
+   #  old <- threshold
+   #  
+   #  if (since_change >= min_hold && cap > threshold) {
+   #    threshold <- cap        # jump directly to the mapped cap
+   #    since_change <- 1       # or set to 1 if you prefer counting this iter as "held"
+   #  } else {
+   #    since_change <- since_change + 1
+   #  }
+   #  print(paste('threshold =', threshold))
+      preds <- preds %>% 
+        suppressMessages(left_join(.,df1))
       
+      keys_to_exclude <- exclude_keys$key
+      keys_in_sample  <- samplefull$key
       
-        
-        keys_to_exclude <- exclude_keys$key
-        keys_in_sample  <- samplefull$key
-        
-        
-        preds <- preds %>% 
-          suppressMessages(left_join(.,df1))
-        
-        
-       sampled_df <- preds %>%
-         ungroup() %>%
-         filter(!key %in% keys_in_sample) %>% 
-         filter(!key %in% keys_to_exclude) %>%
-         arrange(desc(Include)) %>%
-         slice_head(n=15) %>% 
-         bind_rows(preds %>%
-                     ungroup() %>%
-                     filter(!key %in% keys_in_sample)  %>% 
-                     filter(!key %in% keys_to_exclude)  %>%
-                     arrange(desc(Include)) %>%
-                     slice_tail(n=8) )%>%
-         bind_rows(preds %>%  
-                    ungroup() %>%
-                    filter(!key %in% keys_in_sample) %>% 
-                    filter(key %in%  keys_to_exclude) %>%
-                    arrange(desc(Include)) %>%
-                    slice_head(n=7)) %>%  
-         select(-predict, -Include, -Exclude, -new, -incpred, -excpred, -newpred, - thresh) 
-       
-       
-       
+      sampled_df <- preds %>%
+        filter(!(abID %in% samplefull$abID)) %>% 
+        filter(!(abID %in% exclude_keys$abID)) %>%
+        arrange(desc(newpred)) %>%
+        slice(1:15, (nrow(.)-7):nrow(.)) %>% 
+        bind_rows(preds %>%  
+                    filter(!(abID %in% samplefull$abID)) %>% 
+                    filter((abID %in% exclude_keys$abID)) %>%
+                    arrange(desc(newpred)) %>%
+                    slice(1:7 )) %>%  
+        select(-predict, -Include, -Exclude, -new, -incpred, -excpred, -newpred, - thresh) 
+      
     }else{
+      
       sampled_df <- preds %>%  
         arrange(desc(totalscore)) %>%
-        slice(c((nrow(.)-4):nrow(.), 1:20)) %>%
+        slice((nrow(.)-4):nrow(.), 1:20) %>%
         bind_rows(preds %>%  
                     arrange(desc(totalscore)) %>%
                     filter(totalscore*5 <= 2.5) %>% slice(1:5))
-      
-      localH2O = h2o.init(ip="localhost", port = 54321, 
-                          startH2O = TRUE, nthreads=1, max_mem_size = '8G')
-      prefix <- paste0("worker", Sys.getpid(), "_", as.integer(Sys.time()), "_")
       
       
     }
@@ -385,49 +377,48 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
       bind_rows(sampled_df %>% mutate(iter = i)) %>%
       distinct()
     
-includes <- samplefull %>% filter(decision == "Include")
-excludes <- samplefull %>% filter(decision == "Exclude")
-
-n_excl_per_fold <- nrow(includes)  # or set any number you prefer per fold
-
-# 1) 3 repeats of each Include, labeled folds 1, 2, 3
-includes3 <- includes %>%
-  mutate(.k = 1L) %>% 
-  left_join(data.frame(folds = 1:3, .k = 1L), by = ".k",relationship = "many-to-many") %>%
-  select(-.k)
-
-# 2) Randomize all Excludes and partition into 3 (no overlap / no replacement)
-excl_folds <- lapply(1:3, function(f) {
-  excludes %>%
-    slice_sample(n = min(n_excl_per_fold, nrow(.)), replace = FALSE) %>%
-    mutate(folds = f)
-}) %>% bind_rows()
-
-# 3) Combine
-samplefull2 <- bind_rows(includes3, excl_folds)
+    includes <- samplefull %>% filter(screening == "Include")
+    excludes <- samplefull %>% filter(screening == "Exclude")
+    
+    n_excl_per_fold <- nrow(includes)  # or set any number you prefer per fold
+    
+    # 1) 3 repeats of each Include, labeled folds 1, 2, 3
+    includes3 <- includes %>%
+      mutate(.k = 1L) %>% 
+      left_join(data.frame(folds = 1:3, .k = 1L), by = ".k") %>%
+      select(-.k)
+    
+    # 2) Randomize all Excludes and partition into 3 (no overlap / no replacement)
+    excl_folds <- lapply(1:3, function(f) {
+      excludes %>%
+        slice_sample(n = min(n_excl_per_fold, nrow(.)), replace = FALSE) %>%
+        mutate(folds = f)
+    }) %>% bind_rows()
+    
+    # 3) Combine
+    samplefull2 <- bind_rows(includes3, excl_folds)
     
     h2otrain <- h2o.na_omit(as.h2o(samplefull2, destination_frame = paste0(prefix, 'train1',i)))
- 
+    
     test <- df1 %>%
-      filter(!(key %in% samplefull$key))
+      filter(!(abID %in% samplefull$abID))
     
     h2otest <- h2o.na_omit(as.h2o(test, destination_frame = paste0(prefix, 'preddata',i)))
     h2otest <- h2o.na_omit(h2otest)
     
     include_count <- samplefull %>%
-      filter(decision == "Include") %>%
+      filter(screening == "Include") %>%
       nrow()
     
     exclude_count <- samplefull %>%
-      filter(decision == "Exclude") %>%
+      filter(screening == "Exclude") %>%
       nrow()
     
     
     # Update the recipe to use RELEVANCE as the outcome
     
-    y <- "decision"
-    x <- names(df1)[c( 7:(ncol(df1)-1))]
-   
+    y <- "screening"
+    x <- names(df1)[c(  6:(ncol(df1)-1) )]
     
     
     model = h2o.deeplearning(x=x, 
@@ -458,8 +449,7 @@ samplefull2 <- bind_rows(includes3, excl_folds)
                              #max_after_balance_size = max(.1,include_count/exclude_count),
                              #class_sampling_factors = c(1, exclude_count / include_count)
     )
-   
-      
+    
     
     modelcv1 <- h2o.getModel(paste(i, epoc, as.character(activ), stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,'cv_1',sep = '_'))
     predweird1 <- predict(modelcv1, newdata = h2otest ) 
@@ -486,15 +476,15 @@ samplefull2 <- bind_rows(includes3, excl_folds)
     all <- bind_rows(predweird1.2,
                      predweird2.2,
                      predweird3.2) %>%
-      group_by(key, decision, finaldecision) %>%
+      group_by(abID, screening, FTscreening) %>%
       summarise_at(vars(Include), funs(mean(., na.rm =T))) %>%
       ungroup() %>% 
       mutate(Exclude = 1-Include,
              newpred = (Include - min(Include)) / (max(Include) - min(Include) ),
-             predict = ifelse(newpred >= 0.5, "Include", "Exclude")) 
+             predict = ifelse(newpred >=0.5, "Include", "Exclude")) 
     
     preds <- test  %>% 
-      merge(.,all, .by = key) %>%
+      merge(.,all, .by = abID) %>%
       mutate(new = i) %>%
       mutate(incpred = include_count,  # Add the "Include" count
              excpred = exclude_count) %>%
@@ -504,14 +494,11 @@ samplefull2 <- bind_rows(includes3, excl_folds)
     
     my_keys <- h2o.ls()[,1]
     h2o.rm(my_keys[grepl(paste0("^", prefix), my_keys)], cascade = TRUE)
-   
-    gc()
     
-    time2 <- Sys.time()
     
     exclude_keys <- preds %>%
-      ungroup() %>% filter(Include < threshold) %>%
-      select(key, new)
+      filter(Include < threshold) %>%
+      select(abID, new)
     
     # Add the "Exclude" count
     results[[i]] <- preds %>%
@@ -520,10 +507,10 @@ samplefull2 <- bind_rows(includes3, excl_folds)
     
     sumtextPICOS <- (bind_rows(results)) %>%
       mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
-      mutate(inc.correct = ifelse(finaldecision == "Include" & newclass == "Include",1,0)  ) %>%
-      mutate(exc.correct = ifelse(finaldecision == "Exclude" & newclass == "Exclude",1,0)  ) %>%
-      mutate(exc.incorrect = ifelse(finaldecision == "Include" & newclass == "Exclude",1,0)  ) %>%
-      mutate(inc.incorrect = ifelse(finaldecision == "Exclude" & newclass == "Include",1,0)  ) %>%
+      mutate(inc.correct = ifelse(FTscreening == "Include" & newclass == "Include",1,0)  ) %>%
+      mutate(exc.correct = ifelse(FTscreening == "Exclude" & newclass == "Exclude",1,0)  ) %>%
+      mutate(exc.incorrect = ifelse(FTscreening == "Include" & newclass == "Exclude",1,0)  ) %>%
+      mutate(inc.incorrect = ifelse(FTscreening == "Exclude" & newclass == "Include",1,0)  ) %>%
       group_by(., new) %>% #, thresh) %>%
       summarise_at(vars(inc.correct,exc.correct,inc.incorrect, exc.incorrect), funs (sum(.,na.rm= T))) %>%
       merge(.,bind_rows(results) %>%  group_by(.,  new) %>% 
@@ -532,25 +519,25 @@ samplefull2 <- bind_rows(includes3, excl_folds)
     
     
     print(ggarrange(nrow = 2,ncol = 1, ggplot(data = sumtextPICOS, aes(x = new, y = inc.incorrect)) +
-            geom_line(colour = 'blue') +
-            geom_line(colour = 'red', aes(y = exc.incorrect)) +
-            geom_point(pch = 21, colour = 'blue') + 
-            geom_point(pch = 21, colour = 'red', aes(y = exc.incorrect)) +
-            geom_text(vjust = -0.5, size = 3 ,aes(y = exc.incorrect, label = exc.incorrect))+ 
-            geom_text(vjust = -0.5, size = 3 ,aes(y = inc.incorrect, label = inc.incorrect))+ 
-            #facet_wrap(~configs) +
-            #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
-            scale_y_continuous(limits = c(0,max(sumtextPICOS$inc.incorrect)),name = 'Blue = Included Incorrectly', sec.axis = sec_axis(~. , name = "Red = Excluded Incorrectly")) +
-            labs(x = 'Rounds') +
-            theme_classic(), 
-            ggplot(data = subset(preds), aes(x = (Include))) + 
-              geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
-              scale_fill_manual(values = c('black', 'red')) +
-              geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-              #facet_wrap(~new* configs, ncol = 2, scale = 'free')+
-              labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-              theme_classic() +
-              theme(legend.position = "top")))
+                      geom_line(colour = 'blue') +
+                      geom_line(colour = 'red', aes(y = exc.incorrect)) +
+                      geom_point(pch = 21, colour = 'blue') + 
+                      geom_point(pch = 21, colour = 'red', aes(y = exc.incorrect)) +
+                      geom_text(vjust = -0.5, size = 3 ,aes(y = exc.incorrect, label = exc.incorrect))+ 
+                      geom_text(vjust = -0.5, size = 3 ,aes(y = inc.incorrect, label = inc.incorrect))+ 
+                      #facet_wrap(~configs) +
+                      #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
+                      scale_y_continuous(limits = c(0,max(sumtextPICOS$inc.incorrect)),name = 'Blue = Included Incorrectly', sec.axis = sec_axis(~. , name = "Red = Excluded Incorrectly")) +
+                      labs(x = 'Rounds') +
+                      theme_classic(), 
+                    ggplot(data = subset(preds), aes(x = (Include))) + 
+                      geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
+                      scale_fill_manual(values = c('black', 'red')) +
+                      geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
+                      #facet_wrap(~new* configs, ncol = 2, scale = 'free')+
+                      labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known outcome') +
+                      theme_classic() +
+                      theme(legend.position = "top")))
     
     
     
@@ -563,13 +550,15 @@ samplefull2 <- bind_rows(includes3, excl_folds)
     
     gc()
     
+    time2 <- Sys.time()
+    
     print((time2 - time1))
     print(i)
     
     
   }
   
-
+  
   return(bind_rows(results))
 }
 ##run it here#####
@@ -578,50 +567,51 @@ hiddenunis <- c('c(50,25,10,5)')
 activ <- c('Tanh')
 stop_rounds <- c(3)
 stop_tol <- c(1e-5)
-rates_anneal <- c(0.001)
+rates_anneal <- c(1e-3)
 min_batch <- c(1)
 l2 <- c(0.02575)
 rate <- c(0.001)
 TIMES <- 1
 
-results <- run_each5_with_repeats(baked_df, 71,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
-saveRDS(results, 'resultshypertension.rds')
+results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_rounds, stop_tol,rates_anneal, min_batch,l2,rate, TIMES)
+saveRDS(results, 'resultsphil3.rds')
+## summarise#####
+results <- read_rds('resultsphil3.rds')
 
-##summarise#####
-results <- read_rds('resultshypertension.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
-  filter(finaldecision == "Include" & newpred < thresh) %>%
+  filter(FTscreening == "Include" & newpred < thresh) %>%
   select(-starts_with(c('P_','I_', 'C_', 'O_', 'S_', 'KPC', 'review_')))
 
 sumtextPICOS <- results %>%
   mutate(newclass = ifelse(Include < thresh,"Exclude", "Include")) %>%
-  mutate(inc.correct = ifelse(finaldecision == "Include" & newclass == "Include",1,0)  ) %>%
-  mutate(exc.correct = ifelse(finaldecision == "Exclude" & newclass == "Exclude",1,0)  ) %>%
-  mutate(exc.incorrect = ifelse(finaldecision == "Include" & newclass == "Exclude",1,0)  ) %>%
-  mutate(inc.incorrect = ifelse(finaldecision == "Exclude" & newclass == "Include",1,0)  ) %>%
-  group_by(., configs, new, ID, thresh) %>% #, thresh) %>%
+  mutate(inc.correct = ifelse(FTscreening == "Include" & newclass == "Include",1,0)  ) %>%
+  mutate(exc.correct = ifelse(FTscreening == "Exclude" & newclass == "Exclude",1,0)  ) %>%
+  mutate(exc.incorrect = ifelse(FTscreening == "Include" & newclass == "Exclude",1,0)  ) %>%
+  mutate(inc.incorrect = ifelse(FTscreening == "Exclude" & newclass == "Include",1,0)  ) %>%
+  group_by(., configs, new, ID) %>% #, thresh) %>%
   summarise_at(vars(inc.correct,exc.correct,inc.incorrect, exc.incorrect), funs (sum(.,na.rm= T))) %>%
-  merge(.,results %>%  group_by(., configs, new, ID,thresh) %>% 
+  merge(.,results %>%  group_by(., configs, new, ID) %>% 
           summarise_at(vars(incpred, excpred), funs(max(.))), .by = c('configs', 'new'))  %>%
   mutate(reads = incpred+ excpred) %>%
   mutate(percread = (incpred + excpred )/ nrow(baked_df) * 100 ,
-         percsave = exc.correct/nrow(baked_df) * 100,
-         ratio = incpred/excpred * 100) %>%
+         percsave = exc.correct/nrow(baked_df)) %>%
   merge(.,results %>%
-          group_by(configs, new, ID,thresh) %>%
+          group_by(new) %>%
           summarise(
             aucpr = calc_aucpr(cur_data())
           ),.by = new) %>%
   merge(.,results %>%
-          group_by(new, finaldecision, configs) %>%
-          summarise(foundft = (193 - n() ) / 193 * 100) %>% 
-          filter(finaldecision == "Include") %>%
-          select(-finaldecision))%>%
+          group_by(new, FTscreening, .drop= F) %>%
+          summarise(
+            foundft = (sum(baked_df$FTscreening == "Include") - sum(FTscreening == "Include")) /
+              sum(baked_df$FTscreening == "Include") * 100)    %>%
+          filter(FTscreening == "Include") %>%
+          select(-FTscreening))%>%
   mutate(recall = inc.correct  /    (inc.correct   + exc.incorrect) * 100,
-         recall_cumm = (sum(baked_df$finaldecision == "Include") - exc.incorrect ) /    ((sum(baked_df$finaldecision == "Include") - exc.incorrect ) + exc.incorrect) * 100,
-         specificity = exc.correct / (exc.correct + inc.incorrect) * 100)  %>%
-  arrange(-desc(new)) ;View(sumtextPICOS)
+         recall_cumm = (sum(baked_df$FTscreening == "Include") - exc.incorrect ) /    ((sum(baked_df$FTscreening == "Include") - exc.incorrect ) + exc.incorrect) * 100,
+         specificity = (exc.correct / (exc.correct + inc.incorrect)) * 100) %>%
+  arrange(-desc(new)) ;View(sumtextPICOS) 
 
 calclong <- sumtextPICOS %>%
   mutate(aucpr = aucpr*100) %>%
@@ -631,98 +621,50 @@ calclong <- sumtextPICOS %>%
 
 ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.incorrect + inc.correct ))) +
   geom_line(colour = 'blue') +
-    geom_line(colour = 'red', aes(y = exc.incorrect)) +
+  geom_line(colour = 'red', aes(y = exc.incorrect)) +
   geom_point(pch = 21, colour = 'blue') + 
   geom_point(pch = 21, colour = 'red', aes(y = exc.incorrect)) +
   geom_text(vjust = -0.5, size = 3 ,aes(y = exc.incorrect, label = exc.incorrect))+ 
   geom_text(vjust = -0.5, size = 3 ,aes(y = inc.incorrect + inc.correct , label = inc.incorrect + inc.correct  ))+ 
+  #facet_wrap(~configs) +
+  #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
   scale_y_continuous(name = 'Blue = Suggested Includes', sec.axis = sec_axis(~. , name = "Red = Excluded Incorrectly")) +
   labs(x = '% of studies read') +
-  theme_classic() +
-  facet_wrap(~configs)
+  theme_classic()
 
 ggplot(data = calclong, aes(x = percread, y = value)) +
   geom_line(aes(colour = name), size = 1, alpha= 0.5) +
-  geom_abline(slope = 0, intercept =100, linetype=3) +
+  #geom_line(colour = 'red', aes(y = round(specificity,1)), size = 1) +
+  #geom_line(colour = 'purple', aes(y = round(aucpr*100,1)), size = 1) +
+  geom_abline(slope = 0, intercept =100, linetype=2) +
+  #geom_point(pch = 21, colour = 'blue') + 
+  #geom_point(pch = 21, colour = 'red', aes(y = round(specificity,1))) +
+  #geom_text(vjust = -0.5, size = 3 ,aes(y = round(specificity,1), label = round(specificity,1)))+ 
+  # geom_text(vjust = -0.5, size = 3 ,aes(y = round(recall,1)  , label = round(recall,1) ))+ 
+  #geom_point(pch = 21, colour = 'purple', aes(y = round(aucpr*100,1))) +
+  #geom_text(vjust = -0.5, size = 3 ,aes(y = round(aucpr*100,1), label = round(aucpr*100,1)))+ 
+  #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
   scale_y_continuous(limits = c(0,100),name = 'Performance value') +
   labs(x = '% of studies read', colour = "Metric") +
-  scale_color_manual(labels = c("% of includes identified",  "Iteration Recall"  ,"Joint recall", "Specificity"), values= c('red', 'blue', 'green', 'purple'))+
+  scale_color_manual(labels = c("% of includes identified", "Iteration Recall", "Joint Recall"  ,"Specificity"), values= c('red', 'blue', 'green', 'purple'))+
   scale_x_continuous(expand=c(0, 0)) +
-  geom_vline(xintercept = 28.2030620, linetype = 2, colour = 'orange')+
-  geom_vline(xintercept = 22.9653505, linetype = 3, colour = 'gray20')+
+  geom_vline(xintercept = 15.679443, linetype = 2, colour = 'orange')+
+  geom_vline(xintercept = 10.452962, linetype = 3, colour = 'gray20')+
   theme_classic() 
 
-ggsave('Hypertension.png', width = 6, height = 3, dpi = 300)
-
+ggsave('Philippa3.png', width = 6, height = 3, dpi = 300)
 summary(sumtextPICOS$aucpr)
-## Histograms ####
 
-ggplot(data = subset(results, new== 1| new == 35 | new == 70), aes(x = (Include))) + 
-  geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
+## Histograms ####
+ggplot(data = subset(results,new == 1 | new ==2 | new == 3 ), aes(x = (Include))) + 
+  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
+  geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~new ,ncol = 3, scale = 'free')+
+  facet_wrap(~ new , ncol = 3, scale = 'free')+
   labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
   theme_classic() +
   theme(legend.position = "top") + scale_x_continuous(limits = c(0,1))
 
-ggsave('hypertension distrib.png', width = 10, height = 3.3, dpi = 300)
+ggsave('PO-behaviour distrib.png', width = 10, height = 3.3, dpi = 300)
 
-probs1 <- results%>%
-  arrange((newpred)) %>%
-  mutate(p = pmin(pmax(newpred, 1e-6), 1 - 1e-6)) %>%
-  mutate(x =  qlogis(p))
-
-ggplot(subset(probs1, new == 1), aes(x, p)) +
-  stat_function(fun = plogis, xlim = range(probs1$x), size = 0.5, color = "gray", linetype = 2) +
-  geom_point(pch = 21, alpha = 1, size = 1.5, aes(fill = finaldecision)) +
-  geom_point(data = subset(probs1, finaldecision == "Include" & new == 1),pch = 21, alpha = 1, size = 1.5, fill = 'red' ) + 
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(xintercept = qlogis(0.4), linetype = 2) +
-  coord_cartesian(ylim = c(0, 1)) +
-  theme_minimal(base_size = 14) +
-  labs(x = "logit(probability)", y = "Probability", fill = 'Known decisions') +
-  theme(legend.position = "top")  +
-  facet_wrap(~new)
-
-  ggplot(data = subset(results, new > 10 & new < 21), aes(x = (newpred))) + 
-  geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~new* configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top") 
-
-ggplot(data = subset(results, new > 20 & new < 31), aes(x = (newpred))) + 
-  geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~new* configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top") 
-
-ggplot(data = subset(results, new > 30 & new < 41), aes(x = (newpred))) +
-  geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~new* configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top") 
-
-ggplot(data = subset(results, new > 40 & new < 51), aes(x = (Include))) + 
-  geom_histogram( aes(fill = finaldecision,y = after_stat(density))) +
-  scale_fill_manual(values = c('black', 'red')) +
-  geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
-  facet_wrap(~new* configs, ncol = 2, scale = 'free')+
-  labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
-  theme_classic() +
-  theme(legend.position = "top")
-
-baked_df %>% 
-  mutate(scorecat = ifelse(totalscore*5 <3.5, 'low', 'high'))%>%
-  group_by( finaldecision) %>%
-  #filter(totalscore *5   >= 3.5) %>% 
-  summarise(min(totalscore * 5), max(totalscore*5)) 
