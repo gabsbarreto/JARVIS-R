@@ -173,7 +173,7 @@ calc_aucpr <- function(df_iter) {
   return(pr$auc.integral)
 }
 
-##separate and clean DEEPSEEK #####
+## separate and clean DEEPSEEK #####
 dfPICOSfinal <- read_rds('data/sedatbehav.completeDEEPSEEK.rds') %>%
   filter(!is.na(DEEPSEEK_Response)) %>%
   mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
