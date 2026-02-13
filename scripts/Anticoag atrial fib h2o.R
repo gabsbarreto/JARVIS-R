@@ -9,6 +9,13 @@ library(dplyr)
 library(ggpubr)
 library(PRROC)
 
+#   The two functions below allowed me to do hyperparameter tuning.
+#   The first one, ending in 'parallel', allows me to open several parallel sessions
+# and test each hyperparameter combination in parallel. Requires a TON of RAM, so
+# I use it carefully.
+#   The second one, ending in repeats, will test each combination in sequence. Takes
+# longer, but it works.
+
 run_each5_with_repeats_parallel <- function(df, n, epochs, hiddenunis, activ,  stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,  repeats, n_workers) {
   
   # remove contents of the h2o server if one is open already
@@ -156,6 +163,7 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
 }
 
 ## ROC-PR FUNCTION####
+# calc_aucpr is a function designed to calculate aucpr for our analyses. It'll be used in the 'summaries' section.
 calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
@@ -176,6 +184,8 @@ calc_aucpr <- function(df_iter) {
 }
 
 ## separate and clean DEEPSEEK #####
+#   In this section we read the file in 'data' containing our abstracts, decisions and the LLM responses.
+# We break the responses into columns, clean them, create the numberical variables (PICOS scores).
 dfPICOSfinal <- read_rds('data/anticoag.completeDEEPSEEK.rds') %>%
   filter(!is.na(DEEPSEEK_Response)) %>%
   mutate(DEEPSEEK_Response =  str_extract(DEEPSEEK_Response, ".*\\]")  ) %>%
@@ -226,6 +236,7 @@ dfPICOSfinal <- read_rds('data/anticoag.completeDEEPSEEK.rds') %>%
   mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
   filter(FTscreening != 'Awaiting classification') 
 ## PREPARE DATA AND RECIPE#####
+#   In this section we clean the text variables and prepare them for tokenisation and TF-IDF generation.
 dftoken <- dfPICOSfinal %>%
   select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>%              # Remove hyphens
@@ -284,6 +295,8 @@ dir.create('baked', showWarnings = F, recursive = T)
 saveRDS(baked_df, 'baked/Philippa 2 final.rds')
 
 ## START FROM HERE WITH THE BAKED READY####
+# Sometimes, 'baking' the dataframe takes some time depending on your hardware. I preferred to save
+# the dataframe and reload it here below. Also this is where I include the weights.
 baked_df <- read_rds('baked/Philippa 2 final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
@@ -296,7 +309,20 @@ ggplot(baked_df, aes( x = totalscore * 5)) +
 baked_df %>% filter(screening == "Include") %>%
   nrow()
 
-##### new function 5 each time #####
+## new function 5 each time #####
+# each5.2 performs iterative active-screening with an H2O deep-learning classifier.
+# Workflow per round:
+# 1) Select new records to review (top/bottom scoring records plus a small buffer),
+#    then add them to the cumulative labeled sample (`samplefull`).
+# 2) Build training folds by repeating Include cases across folds and sampling Exclude
+#    cases per fold to keep class balance for cross-validation.
+# 3) Train a Bernoulli H2O deep-learning model with the provided hyperparameters.
+# 4) Score unscreened records with each CV model, average Include probabilities,
+#    normalize to `newpred`, and assign Include/Exclude labels using `threshold`.
+# 5) Save per-round predictions and error-tracking fields, and mark low-probability
+#    records as candidates to exclude in later sampling.
+# Early stopping: after the minimum rounds, stop when too few records remain above
+# threshold for consecutive rounds. Returns one data frame with all rounds combined.
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   
   localH2O = h2o.init(ip="localhost", port = 54321, 
@@ -565,6 +591,14 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
 }
 
 ## run it here#####
+# This block sets one hyperparameter configuration and runs the full
+# iterative simulation pipeline.
+# - The vectors below are the model settings explored by
+#   `run_each5_with_repeats` (single values here = one configuration).
+# - `TIMES` controls how many full repeats are executed.
+# - The returned object `results` contains per-round predictions/metrics.
+# - Results are persisted to `results/resultsanticoag2.rds` so the
+#   summarisation section can be rerun without retraining.
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
 activ <- c('Tanh')

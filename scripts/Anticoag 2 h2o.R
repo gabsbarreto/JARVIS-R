@@ -672,7 +672,7 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
 #ggsave('Philippa5.png', width = 6, height = 3, dpi = 300)
 
 summary(sumtextPICOS$aucpr)
-## Histograms ####
+# Histograms ####
 ggplot(data = subset(results,new == 1 | new ==10 | new == 19 ), aes(x = (Include))) + 
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
