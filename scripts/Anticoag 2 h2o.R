@@ -9,6 +9,12 @@ library(dplyr)
 library(ggpubr)
 library(PRROC)
 
+#   The two functions below allowed me to do hyperparameter tuning.
+#   The first one, ending in 'parallel', allows me to open several parallel sessions
+# and test each hyperparameter combination in parallel. Requires a TON of RAM, so 
+# I use it carefully. 
+#   The second one, ending in repeats, will test each combination in sequence. Takes
+# longer, but it works. 
 run_each5_with_repeats_parallel <- function(df, n, epochs, hiddenunis, activ,  stop_rounds, stop_tol, rates_anneal,min_batch,l2,rate,  repeats, n_workers) {
   
   # remove contents of the h2o server if one is open already
@@ -156,6 +162,7 @@ run_each5_with_repeats <- function(df, n, epochs, hiddenunis, activ, stop_rounds
 }
 
 ## ROC-PR FUNCTION####
+# calc_aucpr is a function designed to calculate aucpr for our analyses. It'll be used in the 'summaries' section. 
 calc_aucpr <- function(df_iter) {
   # df_iter = subset of results for a single iteration
   
@@ -175,6 +182,10 @@ calc_aucpr <- function(df_iter) {
   return(pr$auc.integral)
 }
 ##separate and clean DEEPSEEK #####
+
+#   In this section we read the file in 'data' containing our abstracts, decisions and the LLM responses.
+# We break the responses into columns, clean them, create the numberical variables (PICOS scores).
+
 dfPICOSfinal <- read_rds('data/dfgpt.anticoag2.complete.rds') %>%
   filter(!is.na(GPT_Response)) %>%
   mutate(GPT_Response =  str_extract(GPT_Response, ".*\\]")  ) %>%
@@ -224,7 +235,11 @@ dfPICOSfinal <- read_rds('data/dfgpt.anticoag2.complete.rds') %>%
   filter(!is.na(reviewn)) %>%
   mutate(FTscreening = ifelse(is.na(FTscreening),'Exclude', FTscreening )) %>%
   filter(FTscreening != 'Awaiting classification')
+
 ## PREPARE DATA AND RECIPE#####
+
+#   In this section we clean the text variables and prepare them for tokenisation and TF-IDF generation.
+
 dftoken <- dfPICOSfinal %>%
   select(abID, abstract, title, totalscore, review, P, I, C, O, S,Pn, In,Cn, On, Sn, DEC,  screening, FTscreening ) %>%
   mutate(abstractsub = gsub('-', ' ', abstract)) %>%              # Remove hyphens
@@ -251,6 +266,10 @@ dftoken <- dfPICOSfinal %>%
   # filter(review == "No") %>%
   filter(!is.na(abstract))
 
+# The pipe below uses the recipe function, which could be really useful if we're doing a living review,
+# for example. The tokenisation parameters, as well as the matrixes used to calculate the PCA are stored
+# in the 'prepped_recipe' object, which can be used again in a new dataset.
+
 tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstractsub +  P +  I+ C+ O + S + review + totalscore , data = dftoken) %>%
   update_role(abID, new_role = "id") %>% #Mark 'key' as an ID
   update_role(FTscreening, new_role = "id") %>% 
@@ -275,13 +294,18 @@ tokenization_recipe <- recipe(screening ~ abID + abstract + FTscreening + abstra
 prepped_recipe <- prep(tokenization_recipe, training = dftoken, retain = TRUE)  # Preprocess and retain
 baked_df <- bake(prepped_recipe, new_data = NULL) 
 
+# Visualise the distribution of the LLM generated PICOS scores.  
 ggplot(baked_df, aes( x = totalscore)) + 
   geom_histogram( aes(fill = FTscreening, y = ..density..))
 
+# Save the generated file. 
 dir.create('baked', showWarnings = F, recursive = T)
 saveRDS(baked_df, 'baked/Philippa 5 final.rds')
 
-## START FROM HERE WITH THE BAKED READY####
+# START FROM HERE WITH THE BAKED READY####
+# Sometimes, 'baking' the dataframe takes some time depending on your hardware. I preferred to save
+# the dataframe and reload it here below. Also this is where I include the weights.  
+
 baked_df <- read_rds('baked/Philippa 5 final.rds') %>%
   mutate(weightsc = ifelse(screening == "Include", 40,1))
 
@@ -294,7 +318,21 @@ ggplot(baked_df, aes( x = totalscore * 5)) +
 baked_df %>% filter(screening == "Include") %>%
   nrow()
 
-## new function 5 each time #####
+# new function 5 each time #####
+
+# each5.2 performs iterative active-screening with an H2O deep-learning classifier.
+# Workflow per round:
+# 1) Select new records to review (top/bottom scoring records plus a small buffer),
+#    then add them to the cumulative labeled sample (`samplefull`).
+# 2) Build training folds by repeating Include cases across folds and sampling Exclude
+#    cases per fold to keep class balance for cross-validation.
+# 3) Train a Bernoulli H2O deep-learning model with the provided hyperparameters.
+# 4) Score unscreened records with each CV model, average Include probabilities,
+#    normalize to `newpred`, and assign Include/Exclude labels using `threshold`.
+# 5) Save per-round predictions and error-tracking fields, and mark low-probability
+#    records as candidates to exclude in later sampling.
+# Early stopping: after the minimum rounds, stop when too few records remain above
+# threshold for consecutive rounds. Returns one data frame with all rounds combined.
 each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_anneal,min_batch, l2, rate) {
   q = 0
   localH2O = h2o.init(ip="localhost", port = 54321, 
@@ -321,30 +359,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
     if('predict' %in% colnames(preds)) {
       
       
-    #  inc_rate <- (include_count + exclude_count) / nrow(df1)
-    #  print(inc_rate)
-    #  
-    #  cap <- dplyr::case_when(
-    #    #inc_rate > 0.30 ~ 0.75,
-    #    #inc_rate > 0.25 ~ 0.70,
-    #    #inc_rate > 0.20 ~ 0.60,
-    #    #inc_rate > 0.15 ~ 0.55,
-    #    inc_rate > 0.10 ~ 0.5,
-    #    inc_rate > 0.05 ~ 0.45,
-    #    TRUE            ~ threshold
-    #  )
-    #  
-    #  
-    #  old <- threshold
-    #  
-    #  if (since_change >= min_hold && cap > threshold) {
-    #    threshold <- cap        # jump directly to the mapped cap
-    #    since_change <- 1       # or set to 1 if you prefer counting this iter as "held"
-    #  } else {
-    #    since_change <- since_change + 1
-    #  }
-    #  print(paste('threshold =', threshold))
-      preds <- preds %>% 
+         preds <- preds %>% 
         suppressMessages(left_join(.,df1))
       
       sampled_df <- preds %>% ungroup() %>%
@@ -414,9 +429,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
       filter(screening == "Exclude") %>%
       nrow()
     
-    
-    # Update the recipe to use RELEVANCE as the outcome
-    
+       
     y <- "screening"
     x <- names(df1)[c(  6:(ncol(df1)-1) )]
     
@@ -500,7 +513,7 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
       filter(Include < threshold) %>%
       select(abID)
     
-    # Add the "Exclude" count
+    
     results[[i]] <- preds %>%
       select(-starts_with('KPC'), -starts_with('tfidf'), -starts_with(c('P_','I_', 'C_', 'O_', 'S_')))
     
@@ -564,7 +577,15 @@ each5.2 <- function(df1, max,  epoc, hidu, activ, stop_rounds, stop_tol, rates_a
   
   return(bind_rows(results))
 }
-## run it here#####
+# run it here#####
+# This block sets one hyperparameter configuration and runs the full
+# iterative simulation pipeline.
+# - The vectors below are the model settings explored by
+#   `run_each5_with_repeats` (single values here = one configuration).
+# - `TIMES` controls how many full repeats are executed.
+# - The returned object `results` contains per-round predictions/metrics.
+# - Results are persisted to `results/resultsanticoag2.rds` so the
+#   summarisation section can be rerun without retraining.
 epochs <- c(100)
 hiddenunis <- c('c(50,25,10,5)')
 activ <- c('Tanh')
@@ -581,7 +602,7 @@ results <- run_each5_with_repeats(baked_df, 50,  epochs,hiddenunis,activ,  stop_
 dir.create('results', showWarnings = F, recursive = T)
 saveRDS(results, 'results/resultsanticoag2.rds')
 
-## summarise#####
+# summarise#####
 results <- read_rds('results/resultsanticoag2.rds')
 EXCINC <- results %>% 
   group_by(configs) %>%
@@ -639,16 +660,7 @@ ggplot(data = sumtextPICOS, aes(x = (new*30 / nrow(baked_df)* 100), y = (inc.inc
 
 ggplot(data = calclong, aes(x = percread, y = value)) +
   geom_line(aes(colour = name), size = 1, alpha= 0.5) +
-  #geom_line(colour = 'red', aes(y = round(specificity,1)), size = 1) +
-  #geom_line(colour = 'purple', aes(y = round(aucpr*100,1)), size = 1) +
   geom_abline(slope = 0, intercept =100, linetype=2) +
-  #geom_point(pch = 21, colour = 'blue') + 
-  #geom_point(pch = 21, colour = 'red', aes(y = round(specificity,1))) +
-  #geom_text(vjust = -0.5, size = 3 ,aes(y = round(specificity,1), label = round(specificity,1)))+ 
-  # geom_text(vjust = -0.5, size = 3 ,aes(y = round(recall,1)  , label = round(recall,1) ))+ 
-  #geom_point(pch = 21, colour = 'purple', aes(y = round(aucpr*100,1))) +
-  #geom_text(vjust = -0.5, size = 3 ,aes(y = round(aucpr*100,1), label = round(aucpr*100,1)))+ 
-  #scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
   scale_y_continuous(limits = c(0,100),name = 'Performance value') +
   labs(x = '% of studies read', colour = "Metric") +
   geom_vline(xintercept = 23.553719, linetype = 2, colour = 'orange')+
@@ -662,7 +674,6 @@ ggplot(data = calclong, aes(x = percread, y = value)) +
 summary(sumtextPICOS$aucpr)
 ## Histograms ####
 ggplot(data = subset(results,new == 1 | new ==10 | new == 19 ), aes(x = (Include))) + 
-  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(aes(xintercept = thresh), colour = 'blue', linetype = 2) +
@@ -674,7 +685,6 @@ ggplot(data = subset(results,new == 1 | new ==10 | new == 19 ), aes(x = (Include
 #ggsave('anticoag2 distrib.png', width = 10, height = 3.3, dpi = 300)
 
 ggplot(data = subset(results,new <=20 & new >10  ), aes(x = (newpred))) + 
-  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(xintercept = 0.4, colour = 'blue', linetype = 2) +
@@ -684,7 +694,6 @@ ggplot(data = subset(results,new <=20 & new >10  ), aes(x = (newpred))) +
   theme(legend.position = "top") 
 
 ggplot(data = subset(results,new <=30 & new >20  ), aes(x = (newpred))) + 
-  #geom_density(alpha= 0.2, aes(colour = RELEVANCE)) +
   geom_histogram( aes(fill = FTscreening,y = after_stat(density))) +
   scale_fill_manual(values = c('black', 'red')) +
   geom_vline(xintercept = 0.4, colour = 'blue', linetype = 2) +
@@ -692,4 +701,3 @@ ggplot(data = subset(results,new <=30 & new >20  ), aes(x = (newpred))) +
   labs(x = "Predicted Probability ", y = "Probability density",fill = 'Known decision') +
   theme_classic() +
   theme(legend.position = "top") 
-
